@@ -29,7 +29,7 @@ jobs:
       - run: pip install requests
       - name: Run booking bot
         run: |
-          python kbs_booker_1.py \
+          python kbs_booker_bot.py \
             -u "${{ secrets.KBS_USERNAME }}" \
             -p "${{ secrets.KBS_PASSWORD }}" \
             -d "${{ github.event.inputs.date }}" \
