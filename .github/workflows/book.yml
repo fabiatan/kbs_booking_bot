@@ -1,0 +1,38 @@
+name: KBS Booking Bot
+
+on:
+  schedule:
+    - cron: '25 0 * * *'  # 8:25 AM MYT (UTC+8)
+  workflow_dispatch:       # Manual trigger
+    inputs:
+      date:
+        description: 'Booking date (DD/MM/YYYY)'
+        required: true
+      time_start:
+        description: 'Start time (HH:MM:SS)'
+        required: true
+        default: '07:00:00'
+      time_end:
+        description: 'End time (HH:MM:SS)'
+        required: true
+        default: '08:00:00'
+
+jobs:
+  book:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - name: Run booking bot
+        run: |
+          python kbs_booker_1.py \
+            -u "${{ secrets.KBS_USERNAME }}" \
+            -p "${{ secrets.KBS_PASSWORD }}" \
+            -d "${{ github.event.inputs.date }}" \
+            -ts "${{ github.event.inputs.time_start }}" \
+            -te "${{ github.event.inputs.time_end }}" \
+            --poll-timeout 3600
