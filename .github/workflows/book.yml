@@ -2,7 +2,7 @@ name: KBS Booking Bot
 
 on:
   schedule:
-    - cron: '25 0 * * *'  # 8:25 AM MYT (UTC+8)
+    - cron: '0 0 * * 1-5'  # 8:00 AM MYT (UTC+8) on weekdays (Mon-Fri)
   workflow_dispatch:       # Manual trigger
     inputs:
       date:
