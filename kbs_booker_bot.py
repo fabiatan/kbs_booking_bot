@@ -18,8 +18,41 @@ Login requires:
 import requests
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import argparse
+
+
+def get_booking_target():
+    """
+    Calculate booking target: 8 weeks from today with day-specific time slots.
+
+    Time slots:
+    - Monday-Thursday: 7-9pm (19:00-21:00)
+    - Friday: 8-10pm (20:00-22:00)
+
+    Returns:
+        tuple: (date_str in DD/MM/YYYY, time_start, time_end) or None if weekend
+    """
+    today = datetime.now()
+    target_date = today + timedelta(weeks=8)
+
+    day_of_week = target_date.weekday()
+
+    time_slots = {
+        0: ("19:00:00", "21:00:00"),  # Monday: 7-9pm
+        1: ("19:00:00", "21:00:00"),  # Tuesday: 7-9pm
+        2: ("19:00:00", "21:00:00"),  # Wednesday: 7-9pm
+        3: ("19:00:00", "21:00:00"),  # Thursday: 7-9pm
+        4: ("20:00:00", "22:00:00"),  # Friday: 8-10pm
+    }
+
+    if day_of_week not in time_slots:
+        return None  # Weekend - no booking
+
+    time_start, time_end = time_slots[day_of_week]
+    date_str = target_date.strftime("%d/%m/%Y")
+
+    return (date_str, time_start, time_end)
 
 
 class KBSBooker:
@@ -480,7 +513,18 @@ class KBSBooker:
 
             if avail["available"]:
                 self.log(f"SLOT AVAILABLE! Detected after {elapsed:.1f}s ({check_count} checks)")
-                self.send_telegram(f"🎯 Slot available! Attempting to book {config['date']} {config['time_start']}-{config['time_end']}...")
+                # Calculate booking duration and day name
+                t_start = datetime.strptime(config["time_start"], "%H:%M:%S")
+                t_end = datetime.strptime(config["time_end"], "%H:%M:%S")
+                hours = int((t_end - t_start).seconds / 3600)
+                booking_date = datetime.strptime(config["date"], "%d/%m/%Y")
+                day_name = booking_date.strftime("%A")
+                self.send_telegram(
+                    f"🎯 Slot available! Attempting to book...\n"
+                    f"Location: Kompleks Sukan KBS\n"
+                    f"Date: {config['date']} ({day_name})\n"
+                    f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)"
+                )
 
                 # Refresh token before booking (session may have aged)
                 if elapsed > 2400:  # Refresh if waited more than 40 mins
@@ -507,7 +551,12 @@ class KBSBooker:
                         )
                         if confirm_result["success"]:
                             self.log(f"CONFIRMED! {confirm_result['url']}")
-                            self.send_telegram(f"✅ <b>SUCCESS!</b>\n{config['date']} {config['time_start']}-{config['time_end']}")
+                            self.send_telegram(
+                                f"✅ <b>SUCCESS!</b>\n"
+                                f"Location: Kompleks Sukan KBS\n"
+                                f"Date: {config['date']} ({day_name})\n"
+                                f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)"
+                            )
                         else:
                             self.log("WARNING: Confirmation may have failed")
                             self.send_telegram(f"⚠️ Booking created but confirmation may have failed")
@@ -543,9 +592,9 @@ Example:
     )
     parser.add_argument("--username", "-u", required=True, help="IC number")
     parser.add_argument("--password", "-p", required=True, help="Password")
-    parser.add_argument("--date", "-d", default="", help="Booking date (DD/MM/YYYY)")
-    parser.add_argument("--time-start", "-ts", default="", help="Start time (HH:MM:SS)")
-    parser.add_argument("--time-end", "-te", default="", help="End time (HH:MM:SS)")
+    parser.add_argument("--date", "-d", default="", help="Booking date (DD/MM/YYYY). If not specified, auto-calculates 8 weeks from today")
+    parser.add_argument("--time-start", "-ts", default="", help="Start time (HH:MM:SS). If not specified, uses day-specific time slot")
+    parser.add_argument("--time-end", "-te", default="", help="End time (HH:MM:SS). If not specified, uses day-specific time slot")
     parser.add_argument("--venue-id", default="GxqArR56DGE8ZKkBI2f9", help="Encoded venue ID from URL")
     parser.add_argument("--facility-id", default="GxqArR56DGE8AQp3sR5Knm0=", help="Encoded facility ID (optional, fetched dynamically)")
     parser.add_argument("--facility-id-num", type=int, default=477, help="Numeric facility ID")
@@ -575,10 +624,20 @@ Example:
             print(f"  [{i}] idf={f['facility_id_encoded']}")
         return 0
 
-    # Validate required args for booking
+    # Use automatic date/time calculation if not provided
     if not args.date or not args.time_start or not args.time_end:
-        print("ERROR: --date, --time-start, and --time-end are required for booking")
-        return 1
+        target = get_booking_target()
+        if target is None:
+            print("ERROR: Target date is a weekend. No booking scheduled.")
+            return 1
+        auto_date, auto_time_start, auto_time_end = target
+        if not args.date:
+            args.date = auto_date
+        if not args.time_start:
+            args.time_start = auto_time_start
+        if not args.time_end:
+            args.time_end = auto_time_end
+        print(f"Auto-calculated booking: {args.date} {args.time_start}-{args.time_end}")
 
     config = {
         "venue_id": args.venue_id,
