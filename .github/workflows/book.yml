@@ -16,6 +16,9 @@ jobs:
           python-version: '3.11'
       - run: pip install requests
       - name: Run booking bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python kbs_booker_bot.py \
             -u "${{ secrets.KBS_USERNAME }}" \
