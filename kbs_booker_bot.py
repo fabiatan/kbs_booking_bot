@@ -491,6 +491,7 @@ class KBSBooker:
 
         start_time = datetime.now()
         check_count = 0
+        slot_available_notified = False
 
         while True:
             check_count += 1
@@ -499,7 +500,7 @@ class KBSBooker:
             # Check timeout
             if elapsed > poll_timeout:
                 self.log(f"Timeout after {poll_timeout}s ({check_count} checks)")
-                self.send_telegram(f"⏰ Polling timeout after {poll_timeout}s ({check_count} checks)")
+                self.send_telegram(f"❌ Booking failed - timeout after {poll_timeout}s")
                 return False
 
             # Check availability
@@ -519,12 +520,14 @@ class KBSBooker:
                 hours = int((t_end - t_start).seconds / 3600)
                 booking_date = datetime.strptime(config["date"], "%d/%m/%Y")
                 day_name = booking_date.strftime("%A")
-                self.send_telegram(
-                    f"🎯 Slot available! Attempting to book...\n"
-                    f"Location: Kompleks Sukan KBS\n"
-                    f"Date: {config['date']} ({day_name})\n"
-                    f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)"
-                )
+                if not slot_available_notified:
+                    self.send_telegram(
+                        f"🎯 Slot available! Attempting to book...\n"
+                        f"Location: Kompleks Sukan KBS\n"
+                        f"Date: {config['date']} ({day_name})\n"
+                        f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)"
+                    )
+                    slot_available_notified = True
 
                 # Refresh token before booking (session may have aged)
                 if elapsed > 2400:  # Refresh if waited more than 40 mins
@@ -564,7 +567,6 @@ class KBSBooker:
                     return True
                 else:
                     self.log("Booking failed, continuing to poll...")
-                    self.send_telegram("❌ Booking attempt failed, continuing to poll...")
 
             # Progress update every 60 checks
             if check_count % 60 == 0:
