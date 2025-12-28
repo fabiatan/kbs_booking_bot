@@ -15,6 +15,7 @@ Login requires:
 - value: hidden form field (session token)
 """
 
+import os
 import requests
 import re
 import time
@@ -58,9 +59,9 @@ def get_booking_target():
 class KBSBooker:
     BASE_URL = "https://stf.kbs.gov.my"
 
-    # Telegram notification config
-    TELEGRAM_BOT_TOKEN = "8121976263:AAHq5we2Nkj1EUkVbNwqvLEtCwUSquyHPHI"
-    TELEGRAM_CHAT_ID = "1491443704"
+    # Telegram notification config (from environment variables)
+    TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
     def __init__(self, username: str, password: str, debug: bool = False):
         self.username = username
