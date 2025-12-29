@@ -114,6 +114,8 @@ class KBSBooker:
             "Accept-Encoding": "gzip, deflate, br",
         })
         self.ks_token = None
+        self.logged_in = False  # Track login state to skip re-login
+        self._cached_facilities = None  # Cache facility list
     
     def log(self, msg: str):
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -196,6 +198,8 @@ class KBSBooker:
             if not logged_in:
                 self.log(f"Response snippet: {resp.text[:500]}")
         
+        if logged_in:
+            self.logged_in = True
         return logged_in
     
     def get_facility_list(self, venue_id: str, neg: str = "07") -> list:
@@ -487,19 +491,27 @@ class KBSBooker:
         self.log("KBS Booking Bot Started")
         self.log("=" * 50)
         
-        # Step 1: Login
-        self.log("Step 1: Logging in...")
-        if not self.login():
-            self.log("ERROR: Login failed!")
-            return {"success": False, "court_name": None}
-        self.log("Login successful!")
+        # Step 1: Login (skip if already logged in)
+        if self.logged_in:
+            self.log("Step 1: Already logged in, skipping...")
+        else:
+            self.log("Step 1: Logging in...")
+            if not self.login():
+                self.log("ERROR: Login failed!")
+                return {"success": False, "court_name": None}
+            self.log("Login successful!")
         
-        # Step 2: Get fresh facility IDs from the list page
-        self.log("Step 2: Fetching facility list for fresh IDs...")
-        facilities = self.get_facility_list(
-            venue_id=config["venue_id"],
-            neg=config.get("neg", "07")
-        )
+        # Step 2: Get facility IDs (use cache if available)
+        if self._cached_facilities:
+            self.log("Step 2: Using cached facility list...")
+            facilities = self._cached_facilities
+        else:
+            self.log("Step 2: Fetching facility list for fresh IDs...")
+            facilities = self.get_facility_list(
+                venue_id=config["venue_id"],
+                neg=config.get("neg", "07")
+            )
+            self._cached_facilities = facilities  # Cache for next call
         
         if not facilities:
             self.log("ERROR: Could not find any facilities!")
