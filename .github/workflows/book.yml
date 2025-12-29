@@ -8,7 +8,7 @@ on:
       poll_timeout:
         description: 'Poll timeout in seconds'
         required: false
-        default: '2700'
+        default: '20'
         type: string
       parallel:
         description: 'Use parallel booking (5 jobs)'
@@ -45,4 +45,4 @@ jobs:
             -p "${{ secrets.KBS_PASSWORD }}" \
             --day-offset ${{ matrix.day_offset }} \
             ${{ inputs.date != '' && format('-d "{0}"', inputs.date) || '' }} \
-            --poll-timeout ${{ inputs.poll_timeout || '2700' }}
+            --poll-timeout ${{ inputs.poll_timeout || '20' }}
