@@ -2,7 +2,7 @@ name: KBS Booking Bot
 
 on:
   schedule:
-    - cron: '15 0 * * 1-5'  # 8:15 AM MYT (UTC+8) on weekdays (Mon-Fri)
+    - cron: '15 23 * * 0'  # 7:15 AM MYT on Monday only (runs Sun 23:15 UTC)
   workflow_dispatch:        # Manual trigger
 
 jobs:
@@ -23,4 +23,5 @@ jobs:
           python kbs_booker_bot.py \
             -u "${{ secrets.KBS_USERNAME }}" \
             -p "${{ secrets.KBS_PASSWORD }}" \
+            --book-week \
             --poll-timeout 2700

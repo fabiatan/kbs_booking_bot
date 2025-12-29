@@ -23,9 +23,48 @@ from datetime import datetime, timedelta
 import argparse
 
 
+def get_weekly_booking_targets():
+    """
+    Calculate booking targets for the entire week (Mon-Fri), 8 weeks from now.
+    
+    This is used when running on Monday to book all 5 weekday slots at once.
+    
+    Time slots:
+    - Monday-Thursday: 7-9pm (19:00-21:00)
+    - Friday: 8-10pm (20:00-22:00)
+
+    Returns:
+        list of tuples: [(date_str, time_start, time_end), ...] for Mon-Fri
+    """
+    today = datetime.now()
+    
+    # Calculate 8 weeks from today, then find the Monday of that week
+    future_date = today + timedelta(weeks=8)
+    # Subtract the weekday to get to Monday (weekday() returns 0 for Monday)
+    target_monday = future_date - timedelta(days=future_date.weekday())
+    
+    time_slots = {
+        0: ("19:00:00", "21:00:00"),  # Monday: 7-9pm
+        1: ("19:00:00", "21:00:00"),  # Tuesday: 7-9pm
+        2: ("19:00:00", "21:00:00"),  # Wednesday: 7-9pm
+        3: ("19:00:00", "21:00:00"),  # Thursday: 7-9pm
+        4: ("20:00:00", "22:00:00"),  # Friday: 8-10pm
+    }
+    
+    targets = []
+    for day_offset in range(5):  # Mon=0 to Fri=4
+        target_date = target_monday + timedelta(days=day_offset)
+        time_start, time_end = time_slots[day_offset]
+        date_str = target_date.strftime("%d/%m/%Y")
+        targets.append((date_str, time_start, time_end))
+    
+    return targets
+
+
 def get_booking_target():
     """
     Calculate booking target: 8 weeks from today with day-specific time slots.
+    (Legacy single-day function for backward compatibility)
 
     Time slots:
     - Monday-Thursday: 7-9pm (19:00-21:00)
@@ -432,7 +471,7 @@ class KBSBooker:
             "url": resp.url
         }
     
-    def run(self, config: dict, poll_timeout: int = 3600, check_interval: float = 1.0):
+    def run(self, config: dict, poll_timeout: int = 3600, check_interval: float = 1.0) -> dict:
         """
         Main booking flow - polls for availability and books when slot opens
 
@@ -440,6 +479,9 @@ class KBSBooker:
             config: Booking configuration
             poll_timeout: Max seconds to poll
             check_interval: Seconds between availability checks
+        
+        Returns:
+            dict: {"success": bool, "court_name": str or None}
         """
         self.log("=" * 50)
         self.log("KBS Booking Bot Started")
@@ -449,7 +491,7 @@ class KBSBooker:
         self.log("Step 1: Logging in...")
         if not self.login():
             self.log("ERROR: Login failed!")
-            return False
+            return {"success": False, "court_name": None}
         self.log("Login successful!")
         
         # Step 2: Get fresh facility IDs from the list page
@@ -461,7 +503,7 @@ class KBSBooker:
         
         if not facilities:
             self.log("ERROR: Could not find any facilities!")
-            return False
+            return {"success": False, "court_name": None}
         
         # Use the facility index if specified, otherwise first one
         facility_index = config.get("facility_index", 0)
@@ -485,7 +527,7 @@ class KBSBooker:
         
         if not self.ks_token:
             self.log("ERROR: Could not get ks_token!")
-            return False
+            return {"success": False, "court_name": None}
         
         # Step 4: Poll for availability
         self.log(f"Step 4: Polling for availability (timeout: {poll_timeout}s, interval: {check_interval}s)...")
@@ -504,7 +546,7 @@ class KBSBooker:
             if elapsed > poll_timeout:
                 self.log(f"Timeout after {poll_timeout}s ({check_count} checks)")
                 self.send_telegram(f"❌ Booking failed - timeout after {poll_timeout}s")
-                return False
+                return {"success": False, "court_name": None}
 
             # Check availability
             avail = self.check_slot(
@@ -583,8 +625,11 @@ class KBSBooker:
                            f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)\n"
                            f"Check website to verify status."
                         )
+                        facility_name = "Gelanggang Tenis 1" if config.get("facility_index", 0) == 0 else "Gelanggang Tenis 2"
 
-                    return True
+                    # Return with court name for primary booking
+                    facility_name = "Gelanggang Tenis 1" if config.get("facility_index", 0) == 0 else "Gelanggang Tenis 2"
+                    return {"success": True, "court_name": facility_name}
                 else:
                     self.log("Booking failed, continuing to poll...")
                     # Retry logic for failed booking
@@ -604,6 +649,9 @@ class KBSBooker:
                                 config["facility_id_encoded"] = new_facility['facility_id_encoded']
                             elif config.get("retry_facility_id"):
                                 config["facility_id_encoded"] = config["retry_facility_id"]
+                            
+                            # Save original numeric ID before switching
+                            original_num = config.get("facility_id")
                             
                             # Update Numeric ID
                             if config.get("retry_facility_id_num"):
@@ -663,7 +711,7 @@ class KBSBooker:
                                        f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)\n"
                                        f"Check website to verify status."
                                     )
-                                return True # EXIT after successful backup booking
+                                return {"success": True, "court_name": retry_name}  # EXIT after successful backup booking
                             else:
                                 self.log(f"Retry booking with facility index {retry_index} also failed.")
                                 # self.send_telegram(f"❌ Booking failed - primary and retry facilities failed.")
@@ -732,6 +780,7 @@ Example:
     parser.add_argument("--poll-timeout", type=int, default=3600, help="Max seconds to poll (default: 3600 = 1 hour)")
     parser.add_argument("--check-interval", type=float, default=1.0, help="Seconds between availability checks (default: 1)")
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
+    parser.add_argument("--book-week", action="store_true", help="Book all 5 weekday slots (Mon-Fri) for the week 8 weeks ahead. Used when running on Monday.")
     
     args = parser.parse_args()
 
@@ -748,6 +797,105 @@ Example:
         for i, f in enumerate(facilities):
             print(f"  [{i}] idf={f['facility_id_encoded']}")
         return 0
+
+    # BOOK WEEK MODE: Book all 5 weekday slots (Mon-Fri)
+    if args.book_week:
+        print("=" * 50)
+        print("BOOK WEEK MODE: Booking Mon-Fri slots")
+        print("=" * 50)
+        
+        weekly_targets = get_weekly_booking_targets()
+        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        print(f"Targets: {len(weekly_targets)} days")
+        for i, (date, ts, te) in enumerate(weekly_targets):
+            print(f"  [{i}] {day_names[i]}: {date} {ts}-{te}")
+        
+        results = []
+        for i, (date, time_start, time_end) in enumerate(weekly_targets):
+            print(f"\n{'='*50}")
+            print(f"[{i+1}/5] Booking {day_names[i]} ({date})")
+            print(f"{'='*50}")
+            
+            config = {
+                "venue_id": args.venue_id,
+                "facility_id_encoded": args.facility_id,
+                "facility_id": args.facility_id_num,
+                "facility_index": args.facility_index,
+                "tjk_id": args.tjk_id,
+                "retry_facility_index": args.retry_facility_index,
+                "retry_facility_id": args.retry_facility_id,
+                "retry_facility_id_num": args.retry_facility_id_num,
+                "retry_tjk_id": args.retry_tjk_id,
+                "venue_id_num": args.venue_id_num,
+                "date": date,
+                "time_start": time_start,
+                "time_end": time_end,
+                "neg": args.neg,
+                "num_users": args.num_users,
+                "purpose": args.purpose,
+            }
+            
+            # For weekly booking, use shorter timeout per slot
+            slot_timeout = min(args.poll_timeout // 5, 600)  # Max 10 min per slot
+            result = booker.run(config, poll_timeout=slot_timeout, check_interval=args.check_interval)
+            
+            # Handle dict return format
+            if isinstance(result, dict):
+                success = result.get("success", False)
+                court_name = result.get("court_name", "Unknown")
+            else:
+                # Fallback for bool return (shouldn't happen but just in case)
+                success = bool(result)
+                court_name = "Unknown"
+            
+            results.append((day_names[i], date, time_start, time_end, success, court_name))
+            
+            # Explicit continuation message regardless of success/failure
+            if success:
+                print(f"✅ {day_names[i]} booked successfully! (Court: {court_name})")
+                # Note: Individual success messages are already sent by booker.run()
+            else:
+                print(f"❌ {day_names[i]} booking failed (both courts unavailable or timeout).")
+            
+            remaining = 5 - (i + 1)
+            if remaining > 0:
+                print(f"➡️  Continuing to next day... ({remaining} remaining)")
+        
+        print("\n" + "=" * 50)
+        print("WEEKLY BOOKING SUMMARY")
+        print("=" * 50)
+        success_count = sum(1 for r in results if r[4])
+        fail_count = len(results) - success_count
+        print(f"Total: {success_count} SUCCESS, {fail_count} FAILED")
+        for day, date, ts, te, success, court in results:
+            status = "✅ SUCCESS" if success else "❌ FAILED"
+            court_info = f" ({court})" if success and court else ""
+            print(f"  {day} ({date}): {status}{court_info}")
+        
+        # Send Telegram summary in detailed format
+        summary_lines = [
+            f"📅 <b>WEEKLY BOOKING SUMMARY</b>",
+            f"Location: Kompleks Sukan KBS",
+            f"Total: {success_count}/5 booked",
+            ""
+        ]
+        for day, date, ts, te, success, court in results:
+            # Calculate hours
+            from datetime import datetime as dt
+            t_start = dt.strptime(ts, "%H:%M:%S")
+            t_end = dt.strptime(te, "%H:%M:%S")
+            hours = int((t_end - t_start).seconds / 3600)
+            
+            status = "✅" if success else "❌"
+            court_info = f" - {court}" if success and court else ""
+            summary_lines.append(f"{status} {day} ({date}){court_info}")
+            summary_lines.append(f"    Time: {ts}-{te} ({hours}h)")
+        
+        booker.send_telegram("\n".join(summary_lines))
+        
+        # Return success if at least one day was booked
+        any_success = any(r[4] for r in results)
+        return 0 if any_success else 1
 
     # Use automatic date/time calculation if not provided
     if not args.date or not args.time_start or not args.time_end:
@@ -782,14 +930,21 @@ Example:
         "num_users": args.num_users,
         "purpose": args.purpose,
     }
-    success = booker.run(
+    result = booker.run(
         config,
         poll_timeout=args.poll_timeout,
         check_interval=args.check_interval
     )
+    
+    # Handle dict return format
+    if isinstance(result, dict):
+        success = result.get("success", False)
+    else:
+        success = bool(result)
     
     return 0 if success else 1
 
 
 if __name__ == "__main__":
     exit(main())
+
