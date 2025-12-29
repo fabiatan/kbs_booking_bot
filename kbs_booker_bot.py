@@ -415,6 +415,12 @@ class KBSBooker:
         except:
             hours = 1
         
+        # Calculate total price based on time of day
+        # Daytime (before 7pm/19:00) = RM 10/hour, Nighttime (7pm onwards) = RM 15/hour
+        start_hour = start.hour if 'start' in dir() else 19  # Default to nighttime
+        hourly_rate = 10 if start_hour < 19 else 15
+        total_price = config.get("total_price") or str(hours * hourly_rate)
+        
         # Build form data based on HAR capture
         data = {
             "tt_jeniskadar": config.get("jeniskadar", "1"),
@@ -425,7 +431,7 @@ class KBSBooker:
             "masa_tamat": config["time_end"],
             "tt_jumlah_jam": str(hours),
             "tt_jumlah_hari": "",
-            "tt_jumlah": config.get("total_price", "12"),
+            "tt_jumlah": total_price,
             "jamsiang": config.get("rate_day", "10.00"),
             "jammalam": config.get("rate_night", "15.00"),
             "jamsiangbw": config.get("rate_day_bw", "15.00"),
@@ -481,7 +487,7 @@ class KBSBooker:
             return max(matches, key=int)
         return None
     
-    def confirm_booking(self, booking_id: str, total_price: str = "12") -> dict:
+    def confirm_booking(self, booking_id: str, total_price: str = "15") -> dict:
         """
         Confirm the booking via prosestempahan_modifyhandler2.php
         
@@ -623,8 +629,6 @@ class KBSBooker:
             now = datetime.now()
             elapsed = (now - start_time).total_seconds()
             
-
-
             # Check timeout
             if elapsed > poll_timeout:
                 self.log(f"Timeout after {poll_timeout}s ({check_count} checks)")
@@ -667,46 +671,26 @@ class KBSBooker:
 
                 if result["success"]:
                     self.log(f"SUCCESS! Booking created: {result['url']}")
+                    # Determine facility name based on index (set once here)
+                    facility_name = "Gelanggang Tenis 1" if config.get("facility_index", 0) == 0 else "Gelanggang Tenis 2"
 
                     # Confirm booking
                     if result.get("booking_id"):
                         self.log("Step 6: Confirming booking...")
+                        # Calculate rate based on time of day
+                        hourly_rate = 10 if t_start.hour < 19 else 15
                         confirm_result = self.confirm_booking(
                             booking_id=result["booking_id"],
-                            total_price=config.get("total_price", "12")
+                            total_price=str(hours * hourly_rate)
                         )
                         if confirm_result["success"]:
                             self.log(f"CONFIRMED! {confirm_result['url']}")
-                            day_name = booking_date.strftime("%A")
-                            # Determine facility name based on index
-                            facility_name = "Gelanggang Tenis 1" if config.get("facility_index", 0) == 0 else "Gelanggang Tenis 2" 
-                            if config.get("retry_facility_index") and result["success"]: 
-                                facility_name = "Gelanggang Tenis 1" 
-
-                            self.send_telegram(
-                                f"✅ <b>SUCCESS!</b>\n"
-                                f"Location: Kompleks Sukan KBS\n"
-                                f"Court: {facility_name}\n"
-                                f"Date: {config['date']} ({day_name})\n"
-                                f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)"
-                            )
                         else:
                             self.log("WARNING: Confirmation may have failed")
                             self.send_telegram(f"⚠️ Booking created but confirmation may have failed")
                     else:
                         self.log("WARNING: Booking ID not found, skipping confirmation.")
-                        day_name = booking_date.strftime("%A")
-                        self.send_telegram(
-                           f"✅ <b>BOOKING CREATED!</b> (Confirmation skipped)\n"
-                           f"Location: Kompleks Sukan KBS\n"
-                           f"Date: {config['date']} ({day_name})\n"
-                           f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)\n"
-                           f"Check website to verify status."
-                        )
-                        facility_name = "Gelanggang Tenis 1" if config.get("facility_index", 0) == 0 else "Gelanggang Tenis 2"
 
-                    # Return with court name for primary booking
-                    facility_name = "Gelanggang Tenis 1" if config.get("facility_index", 0) == 0 else "Gelanggang Tenis 2"
                     return {"success": True, "court_name": facility_name}
                 else:
                     self.log("Booking failed, continuing to poll...")
@@ -747,23 +731,24 @@ class KBSBooker:
                             
                             if retry_result["success"]:
                                 self.log(f"SUCCESS! Retry booking created: {retry_result['url']}")
+                                # Calculate booking details once (available for all paths)
+                                t_start = datetime.strptime(config["time_start"], "%H:%M:%S")
+                                t_end = datetime.strptime(config["time_end"], "%H:%M:%S")
+                                hours = int((t_end - t_start).seconds / 3600)
+                                booking_date = datetime.strptime(config["date"], "%d/%m/%Y")
+                                day_name = booking_date.strftime("%A")
+                                retry_name = "Gelanggang Tenis 1" if retry_index == 0 else "Gelanggang Tenis 2"
+
                                 if retry_result.get("booking_id"):
                                     self.log("Step 6: Confirming retry booking...")
+                                    # Calculate rate based on time of day
+                                    hourly_rate = 10 if t_start.hour < 19 else 15
                                     confirm_result = self.confirm_booking(
                                         booking_id=retry_result["booking_id"],
-                                        total_price=config.get("total_price", "12")
+                                        total_price=str(hours * hourly_rate)
                                     )
                                     if confirm_result["success"]:
                                         self.log(f"CONFIRMED! {confirm_result['url']}")
-                                        # Calculate booking duration and day name for telegram message
-                                        t_start = datetime.strptime(config["time_start"], "%H:%M:%S")
-                                        t_end = datetime.strptime(config["time_end"], "%H:%M:%S")
-                                        hours = int((t_end - t_start).seconds / 3600)
-                                        booking_date = datetime.strptime(config["date"], "%d/%m/%Y")
-                                        day_name = booking_date.strftime("%A")
-
-                                        # Determine retry facility name
-                                        retry_name = "Gelanggang Tenis 1" if retry_index == 0 else "Gelanggang Tenis 2"
 
                                         self.send_telegram(
                                             f"✅ <b>SUCCESS! (Retry Facility)</b>\n"
@@ -777,10 +762,6 @@ class KBSBooker:
                                         self.send_telegram(f"⚠️ Retry booking created but confirmation may have failed")
                                 else:
                                     self.log("WARNING: Retry Booking ID not found, skipping confirmation.")
-                                    day_name = booking_date.strftime("%A")
-                                    # Determine retry facility name
-                                    retry_name = "Gelanggang Tenis 1" if retry_index == 0 else "Gelanggang Tenis 2"
-
                                     self.send_telegram(
                                        f"✅ <b>BOOKING CREATED! (Retry)</b> (Confirmation skipped)\n"
                                        f"Location: Kompleks Sukan KBS\n"
