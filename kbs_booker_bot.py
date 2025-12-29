@@ -19,6 +19,8 @@ import os
 import requests
 import re
 import time
+import json
+import glob
 from datetime import datetime, timedelta
 import argparse
 
@@ -826,6 +828,7 @@ Example:
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
     parser.add_argument("--book-week", action="store_true", help="Book all 5 weekday slots (Mon-Fri) for the week 8 weeks ahead. Used when running on Monday.")
     parser.add_argument("--day-offset", type=int, default=None, help="Book specific day only (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri). For parallel booking.")
+    parser.add_argument("--summary-report", action="store_true", help="Generate summary report from JSON result files (parallel booking only)")
     
     args = parser.parse_args()
 
@@ -884,7 +887,109 @@ Example:
         else:
             print(f"❌ {day_name} booking failed.")
         
+        # Save result to JSON for aggregation
+        result_data = {
+            "day_name": day_name,
+            "date": date,
+            "time_start": time_start,
+            "time_end": time_end,
+            "success": success,
+            "court_name": court_name,
+            "day_offset": args.day_offset
+        }
+        filename = f"booking_result_{args.day_offset}.json"
+        with open(filename, "w") as f:
+            json.dump(result_data, f)
+        print(f"Result saved to {filename}")
+        
         return 0 if success else 1
+
+    # SUMMARY REPORT MODE: Aggregate results and send Telegram summary
+    if args.summary_report:
+        print("=" * 50)
+        print("GENERATING WEEKLY SUMMARY REPORT")
+        print("=" * 50)
+        
+        # Find all result files
+        files = glob.glob("booking_result_*.json")
+        results = []
+        for f in files:
+            try:
+                with open(f, "r") as fp:
+                    results.append(json.load(fp))
+            except Exception as e:
+                print(f"Error reading {f}: {e}")
+        
+        # Sort by day offset (0=Mon to 4=Fri)
+        results.sort(key=lambda x: x.get("day_offset", 0))
+        
+        success_count = sum(1 for r in results if r["success"])
+        total_count = 5  # We expect 5 days
+        
+        summary_lines = [
+            f"📅 <b>WEEKLY BOOKING SUMMARY</b>",
+            f"Location: Kompleks Sukan KBS",
+            f"Total: {success_count}/{total_count} booked",
+            ""
+        ]
+        
+        # Ensure we have entries for all days (even if missing files)
+        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        
+        # Initialize map with placeholders
+        final_results = {}
+        for i in range(5):
+            # Calculate date for this offset (approximate if not in results)
+            # This is tricky without reference, but we usually have results.
+            # If result missing, we mark as Failed/Unknown
+            final_results[i] = {
+                "day_name": day_names[i],
+                "date": "???", 
+                "time_start": "??:??:??", 
+                "time_end": "??:??:??", 
+                "success": False, 
+                "court_name": None,
+                "missing": True
+            }
+        
+        # Fill in actual results
+        for r in results:
+            offset = r.get("day_offset")
+            if offset is not None:
+                final_results[offset] = r
+                final_results[offset]["missing"] = False
+        
+        # Build the message
+        for i in range(5):
+            r = final_results[i]
+            
+            # Calculate hours if times available
+            time_str = ""
+            if r["time_start"] != "??:??:??":
+                try:
+                    from datetime import datetime as dt
+                    t_start = dt.strptime(r["time_start"], "%H:%M:%S")
+                    t_end = dt.strptime(r["time_end"], "%H:%M:%S")
+                    hours = int((t_end - t_start).seconds / 3600)
+                    time_str = f"    Time: {r['time_start']}-{r['time_end']} ({hours}h)"
+                except:
+                    time_str = f"    Time: {r['time_start']}-{r['time_end']}"
+            
+            status = "✅" if r["success"] else "❌"
+            court_info = f" - {r['court_name']}" if r["success"] and r["court_name"] else ""
+            date_info = f"({r['date']})" if r['date'] != "???" else ""
+            
+            summary_lines.append(f"{status} {r['day_name']} {date_info}{court_info}")
+            if time_str:
+                summary_lines.append(time_str)
+            elif r.get("missing"):
+                summary_lines.append("    (Job failed or result missing)")
+        
+        full_message = "\n".join(summary_lines)
+        print(full_message)
+        booker.send_telegram(full_message)
+        
+        return 0
 
     # BOOK WEEK MODE: Book all 5 weekday slots (Mon-Fri)
     if args.book_week:

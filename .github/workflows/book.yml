@@ -46,3 +46,38 @@ jobs:
             --day-offset ${{ matrix.day_offset }} \
             ${{ inputs.date != '' && format('-d "{0}"', inputs.date) || '' }} \
             --poll-timeout ${{ inputs.poll_timeout || '20' }}
+      
+      - name: Upload result
+        if: always() # Upload even if booking fails
+        uses: actions/upload-artifact@v4
+        with:
+          name: booking-result-${{ matrix.day_offset }}
+          path: booking_result_*.json
+          retention-days: 1
+
+  summary:
+    needs: book
+    runs-on: ubuntu-latest
+    if: always() # Run even if some booking jobs failed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: booking-result-*
+          merge-multiple: true
+      
+      - name: Send Weekly Summary
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          # Use dummy credentials as we only need send_telegram functionality
+          python kbs_booker_bot.py \
+            -u "dummy" -p "dummy" \
+            --summary-report
