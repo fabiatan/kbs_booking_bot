@@ -2,13 +2,29 @@ name: KBS Booking Bot
 
 on:
   schedule:
-    - cron: '15 23 * * 0'  # 7:15 AM MYT on Monday only (runs Sun 23:15 UTC)
-  workflow_dispatch:        # Manual trigger
+    - cron: '10 23 * * 0'  # 7:10 AM MYT on Monday only (runs Sun 23:10 UTC)
+  workflow_dispatch:
+    inputs:
+      poll_timeout:
+        description: 'Poll timeout in seconds'
+        required: false
+        default: '2700'
+        type: string
+      book_week:
+        description: 'Book entire week (Mon-Fri)'
+        required: false
+        default: true
+        type: boolean
+      date:
+        description: 'Specific date to book (DD/MM/YYYY), leave empty for auto'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   book:
     runs-on: ubuntu-latest
-    timeout-minutes: 50     # 45 min poll + buffer
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,5 +39,6 @@ jobs:
           python kbs_booker_bot.py \
             -u "${{ secrets.KBS_USERNAME }}" \
             -p "${{ secrets.KBS_PASSWORD }}" \
-            --book-week \
-            --poll-timeout 2700
+            ${{ inputs.book_week == true && '--book-week' || '' }} \
+            ${{ inputs.date != '' && format('-d "{0}"', inputs.date) || '' }} \
+            --poll-timeout ${{ inputs.poll_timeout || '2700' }}
