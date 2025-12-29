@@ -347,19 +347,19 @@ class KBSBooker:
             "tt_jumlah_jam": str(hours),
             "tt_jumlah_hari": "",
             "tt_jumlah": config.get("total_price", "12"),
-            "jamsiang": config.get("rate_day", "12.00"),
-            "jammalam": config.get("rate_night", "12.00"),
-            "jamsiangbw": config.get("rate_day_bw", "12.00"),
-            "jammalambw": config.get("rate_night_bw", "12.00"),
-            "sehari": config.get("rate_daily", "288.00"),
-            "seharibw": config.get("rate_daily_bw", "288.00"),
+            "jamsiang": config.get("rate_day", "10.00"),
+            "jammalam": config.get("rate_night", "15.00"),
+            "jamsiangbw": config.get("rate_day_bw", "15.00"),
+            "jammalambw": config.get("rate_night_bw", "20.00"),
+            "sehari": config.get("rate_daily", "200.00"),
+            "seharibw": config.get("rate_daily_bw", "250.00"),
             "warga": config.get("warga", "1"),
             "tt_jum_pengguna": config.get("num_users", "4"),
             "tt_tujuan": config.get("purpose", "4"),
             "ks_token": self.ks_token,
             "ks_scriptname": "tempahan_addcal",
             "red": "",
-            "idvanue": config.get("venue_id_num", "1"),
+            "idvanue": config.get("venue_id_num", "2"),
             "idfasiliti": config["facility_id"],
             "tjkid": config["tjk_id"],
             "kodneg": config.get("neg", "07"),
@@ -495,8 +495,10 @@ class KBSBooker:
         slot_available_notified = False
 
         while True:
-            check_count += 1
-            elapsed = (datetime.now() - start_time).total_seconds()
+            now = datetime.now()
+            elapsed = (now - start_time).total_seconds()
+            
+
 
             # Check timeout
             if elapsed > poll_timeout:
@@ -555,19 +557,134 @@ class KBSBooker:
                         )
                         if confirm_result["success"]:
                             self.log(f"CONFIRMED! {confirm_result['url']}")
+                            day_name = booking_date.strftime("%A")
+                            # Determine facility name based on index
+                            facility_name = "Gelanggang Tenis 1" if config.get("facility_index", 0) == 0 else "Gelanggang Tenis 2" 
+                            if config.get("retry_facility_index") and result["success"]: 
+                                facility_name = "Gelanggang Tenis 1" 
+
                             self.send_telegram(
                                 f"✅ <b>SUCCESS!</b>\n"
                                 f"Location: Kompleks Sukan KBS\n"
+                                f"Court: {facility_name}\n"
                                 f"Date: {config['date']} ({day_name})\n"
                                 f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)"
                             )
                         else:
                             self.log("WARNING: Confirmation may have failed")
                             self.send_telegram(f"⚠️ Booking created but confirmation may have failed")
+                    else:
+                        self.log("WARNING: Booking ID not found, skipping confirmation.")
+                        day_name = booking_date.strftime("%A")
+                        self.send_telegram(
+                           f"✅ <b>BOOKING CREATED!</b> (Confirmation skipped)\n"
+                           f"Location: Kompleks Sukan KBS\n"
+                           f"Date: {config['date']} ({day_name})\n"
+                           f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)\n"
+                           f"Check website to verify status."
+                        )
 
                     return True
                 else:
                     self.log("Booking failed, continuing to poll...")
+                    # Retry logic for failed booking
+                    if config.get("retry_facility_index") is not None:
+                        retry_index = config["retry_facility_index"]
+                        self.log(f"Primary booking failed. Retrying with facility index {retry_index}...")
+                        
+                        # Fetch new facility details
+                        facilities = self.get_facility_list(config["venue_id"], config.get("neg", "07"))
+                        if 0 <= retry_index < len(facilities):
+                            new_facility = facilities[retry_index]
+                            self.log(f"Switching to facility: {new_facility['facility_id_encoded']}")
+                            
+                            # Update config for retry
+                            # Prefer fetched ID from index if available, otherwise use strict default from args
+                            if 'facility_id_encoded' in new_facility:
+                                config["facility_id_encoded"] = new_facility['facility_id_encoded']
+                            elif config.get("retry_facility_id"):
+                                config["facility_id_encoded"] = config["retry_facility_id"]
+                            
+                            # Update Numeric ID
+                            if config.get("retry_facility_id_num"):
+                                config["facility_id"] = config["retry_facility_id_num"]
+                            
+                            # Update TJK ID (Crucial fix for different facilities)
+                            original_tjk = config.get("tjk_id")
+                            if config.get("retry_tjk_id"):
+                                config["tjk_id"] = config["retry_tjk_id"]
+                            
+                            # RE-ATTEMPT BOOKING with the new facility
+                            self.log(f"Re-attempting booking with facility: {config['facility_id_encoded']} (Num ID: {config['facility_id']}, TJK: {config['tjk_id']})...")
+                            time.sleep(1.0) # Small delay before retry
+                            retry_result = self.book_slot(config)
+                            
+                            if retry_result["success"]:
+                                self.log(f"SUCCESS! Retry booking created: {retry_result['url']}")
+                                if retry_result.get("booking_id"):
+                                    self.log("Step 6: Confirming retry booking...")
+                                    confirm_result = self.confirm_booking(
+                                        booking_id=retry_result["booking_id"],
+                                        total_price=config.get("total_price", "12")
+                                    )
+                                    if confirm_result["success"]:
+                                        self.log(f"CONFIRMED! {confirm_result['url']}")
+                                        # Calculate booking duration and day name for telegram message
+                                        t_start = datetime.strptime(config["time_start"], "%H:%M:%S")
+                                        t_end = datetime.strptime(config["time_end"], "%H:%M:%S")
+                                        hours = int((t_end - t_start).seconds / 3600)
+                                        booking_date = datetime.strptime(config["date"], "%d/%m/%Y")
+                                        day_name = booking_date.strftime("%A")
+
+                                        # Determine retry facility name
+                                        retry_name = "Gelanggang Tenis 1" if retry_index == 0 else "Gelanggang Tenis 2"
+
+                                        self.send_telegram(
+                                            f"✅ <b>SUCCESS! (Retry Facility)</b>\n"
+                                            f"Location: Kompleks Sukan KBS\n"
+                                            f"Court: {retry_name}\n"
+                                            f"Date: {config['date']} ({day_name})\n"
+                                            f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)"
+                                        )
+                                    else:
+                                        self.log("WARNING: Retry booking created but confirmation may have failed")
+                                        self.send_telegram(f"⚠️ Retry booking created but confirmation may have failed")
+                                else:
+                                    self.log("WARNING: Retry Booking ID not found, skipping confirmation.")
+                                    day_name = booking_date.strftime("%A")
+                                    # Determine retry facility name
+                                    retry_name = "Gelanggang Tenis 1" if retry_index == 0 else "Gelanggang Tenis 2"
+
+                                    self.send_telegram(
+                                       f"✅ <b>BOOKING CREATED! (Retry)</b> (Confirmation skipped)\n"
+                                       f"Location: Kompleks Sukan KBS\n"
+                                       f"Court: {retry_name}\n"
+                                       f"Date: {config['date']} ({day_name})\n"
+                                       f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)\n"
+                                       f"Check website to verify status."
+                                    )
+                                return True # EXIT after successful backup booking
+                            else:
+                                self.log(f"Retry booking with facility index {retry_index} also failed.")
+                                # self.send_telegram(f"❌ Booking failed - primary and retry facilities failed.")
+                                # Don't exit here, maybe primary becomes available? Or just fail?
+                                # If fast book, we might loop. If standard, we loop.
+                                
+                                # Revert ID to primary for next loop iteration check
+                                config["facility_id_encoded"] = facilities[config.get("facility_index", 0)]['facility_id_encoded']
+                                config["facility_id"] = original_num
+                                config["tjk_id"] = original_tjk
+                                
+                                # Do NOT return False here. We want to continue polling if retry failed.
+                                # Just log and loop around.
+                                self.log("Continuing to poll...")
+                                pass 
+                        else:
+                            self.log(f"Invalid retry facility index: {retry_index}. Cannot retry.")
+                            pass
+                    else:
+                        # No retry facility configured, so just log and continue polling
+                        pass
 
             # Progress update every 60 checks
             if check_count % 60 == 0:
@@ -598,10 +715,15 @@ Example:
     parser.add_argument("--date", "-d", default="", help="Booking date (DD/MM/YYYY). If not specified, auto-calculates 8 weeks from today")
     parser.add_argument("--time-start", "-ts", default="", help="Start time (HH:MM:SS). If not specified, uses day-specific time slot")
     parser.add_argument("--time-end", "-te", default="", help="End time (HH:MM:SS). If not specified, uses day-specific time slot")
-    parser.add_argument("--venue-id", default="GxqArR56DGE8ZKkBI2f9", help="Encoded venue ID from URL")
-    parser.add_argument("--facility-id", default="GxqArR56DGE8AQp3sR5Knm0=", help="Encoded facility ID (optional, fetched dynamically)")
-    parser.add_argument("--facility-id-num", type=int, default=477, help="Numeric facility ID")
-    parser.add_argument("--tjk-id", type=int, default=528, help="TJK ID (slot type)")
+    parser.add_argument("--venue-id", default="GxqArR56DGE8ZakBI2f9", help="Encoded venue ID from URL")
+    parser.add_argument("--facility-id", default="GxqArR56DGE8ZGR0sR5Knm0=", help="Encoded facility ID (optional, fetched dynamically)")
+    parser.add_argument("--facility-id-num", type=int, default=114, help="Numeric facility ID (Primary)")
+    parser.add_argument("--tjk-id", type=int, default=624, help="TJK ID (Primary)")
+    parser.add_argument("--retry-facility-index", type=int, default=1, help="Index of secondary facility to retry if primary fails (e.g., 1)")
+    parser.add_argument("--retry-facility-id", default="GxqArR56DGE8ZwNlsR5Knm0=", help="Encoded parameter for secondary facility (from HAR)")
+    parser.add_argument("--retry-facility-id-num", type=int, default=202, help="Numeric ID of secondary facility (Retry)")
+    parser.add_argument("--retry-tjk-id", type=int, default=625, help="TJK ID for secondary facility (Retry)")
+    parser.add_argument("--venue-id-num", type=int, default=2, help="Numeric Venue ID (from idvanue)")
     parser.add_argument("--neg", default="07", help="State code (default: 07)")
     parser.add_argument("--facility-index", type=int, default=0, help="Index of facility from list (default: 0, first one)")
     parser.add_argument("--list-facilities", action="store_true", help="List available facilities and exit")
@@ -648,6 +770,11 @@ Example:
         "facility_id": args.facility_id_num,
         "facility_index": args.facility_index,
         "tjk_id": args.tjk_id,
+        "retry_facility_index": args.retry_facility_index,
+        "retry_facility_id": args.retry_facility_id,
+        "retry_facility_id_num": args.retry_facility_id_num,
+        "retry_tjk_id": args.retry_tjk_id,
+        "venue_id_num": args.venue_id_num,
         "date": args.date,
         "time_start": args.time_start,
         "time_end": args.time_end,
