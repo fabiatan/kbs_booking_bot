@@ -538,16 +538,48 @@ class KBSBooker:
             self.log("Login successful!")
         
         # Step 2: Get facility IDs (use cache if available)
+        # If venue is closed/unavailable, poll until facilities appear
+        venue_poll_interval = 3.0  # seconds between venue checks
+        venue_poll_timeout = min(poll_timeout, 3000)  # Max 50 minutes for venue polling
+        
         if self._cached_facilities:
             self.log("Step 2: Using cached facility list...")
             facilities = self._cached_facilities
         else:
-            self.log("Step 2: Fetching facility list for fresh IDs...")
-            facilities = self.get_facility_list(
-                venue_id=config["venue_id"],
-                neg=config.get("neg", "07")
-            )
-            self._cached_facilities = facilities  # Cache for next call
+            self.log("Step 2: Fetching facility list (will poll if venue closed)...")
+            venue_poll_start = datetime.now()
+            venue_poll_count = 0
+            
+            while True:
+                facilities = self.get_facility_list(
+                    venue_id=config["venue_id"],
+                    neg=config.get("neg", "07")
+                )
+                venue_poll_count += 1
+                
+                if facilities:
+                    elapsed = (datetime.now() - venue_poll_start).total_seconds()
+                    if venue_poll_count > 1:
+                        self.log(f"Venue now available! Found {len(facilities)} facilities after {elapsed:.1f}s ({venue_poll_count} checks)")
+                    else:
+                        self.log(f"Found {len(facilities)} facilities")
+                    self._cached_facilities = facilities  # Cache for next call
+                    break
+                
+                # Check timeout
+                elapsed = (datetime.now() - venue_poll_start).total_seconds()
+                if elapsed >= venue_poll_timeout:
+                    self.log(f"Venue polling timeout after {elapsed:.1f}s ({venue_poll_count} checks)")
+                    self.log("ERROR: Venue still not available!")
+                    return {"success": False, "court_name": None}
+                
+                # Progress update every 20 checks (~60 seconds)
+                if venue_poll_count % 20 == 0:
+                    mins = int(elapsed // 60)
+                    secs = int(elapsed % 60)
+                    self.log(f"[{mins:02d}:{secs:02d}] Waiting for venue to open... ({venue_poll_count} checks)")
+                
+                time.sleep(venue_poll_interval)
         
         if not facilities:
             self.log("ERROR: Could not find any facilities!")
