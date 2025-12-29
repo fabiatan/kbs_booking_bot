@@ -23,9 +23,82 @@ from datetime import datetime, timedelta
 import argparse
 
 
+def get_weekly_booking_targets():
+    """
+    Calculate booking targets for the entire week (Mon-Fri), 8 weeks from now.
+    
+    This is used when running on Monday to book all 5 weekday slots at once.
+    
+    Time slots:
+    - Monday-Thursday: 7-9pm (19:00-21:00)
+    - Friday: 8-10pm (20:00-22:00)
+
+    Returns:
+        list of tuples: [(date_str, time_start, time_end), ...] for Mon-Fri
+    """
+    today = datetime.now()
+    
+    # Calculate 8 weeks from today, then find the Monday of that week
+    future_date = today + timedelta(weeks=8)
+    # Subtract the weekday to get to Monday (weekday() returns 0 for Monday)
+    target_monday = future_date - timedelta(days=future_date.weekday())
+    
+    time_slots = {
+        0: ("19:00:00", "21:00:00"),  # Monday: 7-9pm
+        1: ("19:00:00", "21:00:00"),  # Tuesday: 7-9pm
+        2: ("19:00:00", "21:00:00"),  # Wednesday: 7-9pm
+        3: ("19:00:00", "21:00:00"),  # Thursday: 7-9pm
+        4: ("20:00:00", "22:00:00"),  # Friday: 8-10pm
+    }
+    
+    targets = []
+    for day_offset in range(5):  # Mon=0 to Fri=4
+        target_date = target_monday + timedelta(days=day_offset)
+        time_start, time_end = time_slots[day_offset]
+        date_str = target_date.strftime("%d/%m/%Y")
+        targets.append((date_str, time_start, time_end))
+    
+    return targets
+
+
+def get_single_day_target(day_offset: int):
+    """
+    Calculate booking target for a specific day, 8 weeks from now.
+    Used for parallel booking where each job books one day.
+    
+    Args:
+        day_offset: 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday
+    
+    Returns:
+        tuple: (date_str, time_start, time_end, day_name)
+    """
+    if day_offset < 0 or day_offset > 4:
+        raise ValueError(f"day_offset must be 0-4, got {day_offset}")
+    
+    today = datetime.now()
+    future_date = today + timedelta(weeks=8)
+    target_monday = future_date - timedelta(days=future_date.weekday())
+    target_date = target_monday + timedelta(days=day_offset)
+    
+    time_slots = {
+        0: ("19:00:00", "21:00:00"),  # Monday: 7-9pm
+        1: ("19:00:00", "21:00:00"),  # Tuesday: 7-9pm
+        2: ("19:00:00", "21:00:00"),  # Wednesday: 7-9pm
+        3: ("19:00:00", "21:00:00"),  # Thursday: 7-9pm
+        4: ("20:00:00", "22:00:00"),  # Friday: 8-10pm
+    }
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    
+    time_start, time_end = time_slots[day_offset]
+    date_str = target_date.strftime("%d/%m/%Y")
+    
+    return (date_str, time_start, time_end, day_names[day_offset])
+
+
 def get_booking_target():
     """
     Calculate booking target: 8 weeks from today with day-specific time slots.
+    (Legacy single-day function for backward compatibility)
 
     Time slots:
     - Monday-Thursday: 7-9pm (19:00-21:00)
@@ -75,6 +148,8 @@ class KBSBooker:
             "Accept-Encoding": "gzip, deflate, br",
         })
         self.ks_token = None
+        self.logged_in = False  # Track login state to skip re-login
+        self._cached_facilities = None  # Cache facility list
     
     def log(self, msg: str):
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -157,6 +232,8 @@ class KBSBooker:
             if not logged_in:
                 self.log(f"Response snippet: {resp.text[:500]}")
         
+        if logged_in:
+            self.logged_in = True
         return logged_in
     
     def get_facility_list(self, venue_id: str, neg: str = "07") -> list:
@@ -347,19 +424,19 @@ class KBSBooker:
             "tt_jumlah_jam": str(hours),
             "tt_jumlah_hari": "",
             "tt_jumlah": config.get("total_price", "12"),
-            "jamsiang": config.get("rate_day", "12.00"),
-            "jammalam": config.get("rate_night", "12.00"),
-            "jamsiangbw": config.get("rate_day_bw", "12.00"),
-            "jammalambw": config.get("rate_night_bw", "12.00"),
-            "sehari": config.get("rate_daily", "288.00"),
-            "seharibw": config.get("rate_daily_bw", "288.00"),
+            "jamsiang": config.get("rate_day", "10.00"),
+            "jammalam": config.get("rate_night", "15.00"),
+            "jamsiangbw": config.get("rate_day_bw", "15.00"),
+            "jammalambw": config.get("rate_night_bw", "20.00"),
+            "sehari": config.get("rate_daily", "200.00"),
+            "seharibw": config.get("rate_daily_bw", "250.00"),
             "warga": config.get("warga", "1"),
             "tt_jum_pengguna": config.get("num_users", "4"),
             "tt_tujuan": config.get("purpose", "4"),
             "ks_token": self.ks_token,
             "ks_scriptname": "tempahan_addcal",
             "red": "",
-            "idvanue": config.get("venue_id_num", "1"),
+            "idvanue": config.get("venue_id_num", "2"),
             "idfasiliti": config["facility_id"],
             "tjkid": config["tjk_id"],
             "kodneg": config.get("neg", "07"),
@@ -432,7 +509,7 @@ class KBSBooker:
             "url": resp.url
         }
     
-    def run(self, config: dict, poll_timeout: int = 3600, check_interval: float = 1.0):
+    def run(self, config: dict, poll_timeout: int = 3600, check_interval: float = 1.0) -> dict:
         """
         Main booking flow - polls for availability and books when slot opens
 
@@ -440,28 +517,39 @@ class KBSBooker:
             config: Booking configuration
             poll_timeout: Max seconds to poll
             check_interval: Seconds between availability checks
+        
+        Returns:
+            dict: {"success": bool, "court_name": str or None}
         """
         self.log("=" * 50)
         self.log("KBS Booking Bot Started")
         self.log("=" * 50)
         
-        # Step 1: Login
-        self.log("Step 1: Logging in...")
-        if not self.login():
-            self.log("ERROR: Login failed!")
-            return False
-        self.log("Login successful!")
+        # Step 1: Login (skip if already logged in)
+        if self.logged_in:
+            self.log("Step 1: Already logged in, skipping...")
+        else:
+            self.log("Step 1: Logging in...")
+            if not self.login():
+                self.log("ERROR: Login failed!")
+                return {"success": False, "court_name": None}
+            self.log("Login successful!")
         
-        # Step 2: Get fresh facility IDs from the list page
-        self.log("Step 2: Fetching facility list for fresh IDs...")
-        facilities = self.get_facility_list(
-            venue_id=config["venue_id"],
-            neg=config.get("neg", "07")
-        )
+        # Step 2: Get facility IDs (use cache if available)
+        if self._cached_facilities:
+            self.log("Step 2: Using cached facility list...")
+            facilities = self._cached_facilities
+        else:
+            self.log("Step 2: Fetching facility list for fresh IDs...")
+            facilities = self.get_facility_list(
+                venue_id=config["venue_id"],
+                neg=config.get("neg", "07")
+            )
+            self._cached_facilities = facilities  # Cache for next call
         
         if not facilities:
             self.log("ERROR: Could not find any facilities!")
-            return False
+            return {"success": False, "court_name": None}
         
         # Use the facility index if specified, otherwise first one
         facility_index = config.get("facility_index", 0)
@@ -475,17 +563,20 @@ class KBSBooker:
         # Update config with fresh encoded ID
         fresh_facility_id = selected_facility["facility_id_encoded"]
         
-        # Step 3: Get calendar page for ks_token
-        self.log("Step 3: Fetching calendar page for token...")
-        self.get_calendar_page(
-            venue_id=config["venue_id"],
-            facility_id=fresh_facility_id,  # Use fresh ID from facility list
-            neg=config.get("neg", "07")
-        )
-        
-        if not self.ks_token:
-            self.log("ERROR: Could not get ks_token!")
-            return False
+        # Step 3: Get calendar page for ks_token (skip if cached)
+        if self.ks_token:
+            self.log("Step 3: Using cached ks_token, skipping calendar page...")
+        else:
+            self.log("Step 3: Fetching calendar page for token...")
+            self.get_calendar_page(
+                venue_id=config["venue_id"],
+                facility_id=fresh_facility_id,  # Use fresh ID from facility list
+                neg=config.get("neg", "07")
+            )
+            
+            if not self.ks_token:
+                self.log("ERROR: Could not get ks_token!")
+                return {"success": False, "court_name": None}
         
         # Step 4: Poll for availability
         self.log(f"Step 4: Polling for availability (timeout: {poll_timeout}s, interval: {check_interval}s)...")
@@ -495,14 +586,16 @@ class KBSBooker:
         slot_available_notified = False
 
         while True:
-            check_count += 1
-            elapsed = (datetime.now() - start_time).total_seconds()
+            now = datetime.now()
+            elapsed = (now - start_time).total_seconds()
+            
+
 
             # Check timeout
             if elapsed > poll_timeout:
                 self.log(f"Timeout after {poll_timeout}s ({check_count} checks)")
-                self.send_telegram(f"❌ Booking failed - timeout after {poll_timeout}s")
-                return False
+                # Skip Telegram notification for timeout - waste of time
+                return {"success": False, "court_name": None}
 
             # Check availability
             avail = self.check_slot(
@@ -522,12 +615,7 @@ class KBSBooker:
                 booking_date = datetime.strptime(config["date"], "%d/%m/%Y")
                 day_name = booking_date.strftime("%A")
                 if not slot_available_notified:
-                    self.send_telegram(
-                        f"🎯 Slot available! Attempting to book...\n"
-                        f"Location: Kompleks Sukan KBS\n"
-                        f"Date: {config['date']} ({day_name})\n"
-                        f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)"
-                    )
+                    # Skip Telegram notification for slot available - proceed directly to booking
                     slot_available_notified = True
 
                 # Refresh token before booking (session may have aged)
@@ -555,19 +643,140 @@ class KBSBooker:
                         )
                         if confirm_result["success"]:
                             self.log(f"CONFIRMED! {confirm_result['url']}")
+                            day_name = booking_date.strftime("%A")
+                            # Determine facility name based on index
+                            facility_name = "Gelanggang Tenis 1" if config.get("facility_index", 0) == 0 else "Gelanggang Tenis 2" 
+                            if config.get("retry_facility_index") and result["success"]: 
+                                facility_name = "Gelanggang Tenis 1" 
+
                             self.send_telegram(
                                 f"✅ <b>SUCCESS!</b>\n"
                                 f"Location: Kompleks Sukan KBS\n"
+                                f"Court: {facility_name}\n"
                                 f"Date: {config['date']} ({day_name})\n"
                                 f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)"
                             )
                         else:
                             self.log("WARNING: Confirmation may have failed")
                             self.send_telegram(f"⚠️ Booking created but confirmation may have failed")
+                    else:
+                        self.log("WARNING: Booking ID not found, skipping confirmation.")
+                        day_name = booking_date.strftime("%A")
+                        self.send_telegram(
+                           f"✅ <b>BOOKING CREATED!</b> (Confirmation skipped)\n"
+                           f"Location: Kompleks Sukan KBS\n"
+                           f"Date: {config['date']} ({day_name})\n"
+                           f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)\n"
+                           f"Check website to verify status."
+                        )
+                        facility_name = "Gelanggang Tenis 1" if config.get("facility_index", 0) == 0 else "Gelanggang Tenis 2"
 
-                    return True
+                    # Return with court name for primary booking
+                    facility_name = "Gelanggang Tenis 1" if config.get("facility_index", 0) == 0 else "Gelanggang Tenis 2"
+                    return {"success": True, "court_name": facility_name}
                 else:
                     self.log("Booking failed, continuing to poll...")
+                    # Retry logic for failed booking
+                    if config.get("retry_facility_index") is not None:
+                        retry_index = config["retry_facility_index"]
+                        self.log(f"Primary booking failed. Retrying with facility index {retry_index}...")
+                        
+                        # Fetch new facility details
+                        facilities = self.get_facility_list(config["venue_id"], config.get("neg", "07"))
+                        if 0 <= retry_index < len(facilities):
+                            new_facility = facilities[retry_index]
+                            self.log(f"Switching to facility: {new_facility['facility_id_encoded']}")
+                            
+                            # Update config for retry
+                            # Prefer fetched ID from index if available, otherwise use strict default from args
+                            if 'facility_id_encoded' in new_facility:
+                                config["facility_id_encoded"] = new_facility['facility_id_encoded']
+                            elif config.get("retry_facility_id"):
+                                config["facility_id_encoded"] = config["retry_facility_id"]
+                            
+                            # Save original numeric ID before switching
+                            original_num = config.get("facility_id")
+                            
+                            # Update Numeric ID
+                            if config.get("retry_facility_id_num"):
+                                config["facility_id"] = config["retry_facility_id_num"]
+                            
+                            # Update TJK ID (Crucial fix for different facilities)
+                            original_tjk = config.get("tjk_id")
+                            if config.get("retry_tjk_id"):
+                                config["tjk_id"] = config["retry_tjk_id"]
+                            
+                            # RE-ATTEMPT BOOKING with the new facility
+                            self.log(f"Re-attempting booking with facility: {config['facility_id_encoded']} (Num ID: {config['facility_id']}, TJK: {config['tjk_id']})...")
+                            time.sleep(1.0) # Small delay before retry
+                            retry_result = self.book_slot(config)
+                            
+                            if retry_result["success"]:
+                                self.log(f"SUCCESS! Retry booking created: {retry_result['url']}")
+                                if retry_result.get("booking_id"):
+                                    self.log("Step 6: Confirming retry booking...")
+                                    confirm_result = self.confirm_booking(
+                                        booking_id=retry_result["booking_id"],
+                                        total_price=config.get("total_price", "12")
+                                    )
+                                    if confirm_result["success"]:
+                                        self.log(f"CONFIRMED! {confirm_result['url']}")
+                                        # Calculate booking duration and day name for telegram message
+                                        t_start = datetime.strptime(config["time_start"], "%H:%M:%S")
+                                        t_end = datetime.strptime(config["time_end"], "%H:%M:%S")
+                                        hours = int((t_end - t_start).seconds / 3600)
+                                        booking_date = datetime.strptime(config["date"], "%d/%m/%Y")
+                                        day_name = booking_date.strftime("%A")
+
+                                        # Determine retry facility name
+                                        retry_name = "Gelanggang Tenis 1" if retry_index == 0 else "Gelanggang Tenis 2"
+
+                                        self.send_telegram(
+                                            f"✅ <b>SUCCESS! (Retry Facility)</b>\n"
+                                            f"Location: Kompleks Sukan KBS\n"
+                                            f"Court: {retry_name}\n"
+                                            f"Date: {config['date']} ({day_name})\n"
+                                            f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)"
+                                        )
+                                    else:
+                                        self.log("WARNING: Retry booking created but confirmation may have failed")
+                                        self.send_telegram(f"⚠️ Retry booking created but confirmation may have failed")
+                                else:
+                                    self.log("WARNING: Retry Booking ID not found, skipping confirmation.")
+                                    day_name = booking_date.strftime("%A")
+                                    # Determine retry facility name
+                                    retry_name = "Gelanggang Tenis 1" if retry_index == 0 else "Gelanggang Tenis 2"
+
+                                    self.send_telegram(
+                                       f"✅ <b>BOOKING CREATED! (Retry)</b> (Confirmation skipped)\n"
+                                       f"Location: Kompleks Sukan KBS\n"
+                                       f"Court: {retry_name}\n"
+                                       f"Date: {config['date']} ({day_name})\n"
+                                       f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)\n"
+                                       f"Check website to verify status."
+                                    )
+                                return {"success": True, "court_name": retry_name}  # EXIT after successful backup booking
+                            else:
+                                self.log(f"Retry booking with facility index {retry_index} also failed.")
+                                # self.send_telegram(f"❌ Booking failed - primary and retry facilities failed.")
+                                # Don't exit here, maybe primary becomes available? Or just fail?
+                                # If fast book, we might loop. If standard, we loop.
+                                
+                                # Revert ID to primary for next loop iteration check
+                                config["facility_id_encoded"] = facilities[config.get("facility_index", 0)]['facility_id_encoded']
+                                config["facility_id"] = original_num
+                                config["tjk_id"] = original_tjk
+                                
+                                # Do NOT return False here. We want to continue polling if retry failed.
+                                # Just log and loop around.
+                                self.log("Continuing to poll...")
+                                pass 
+                        else:
+                            self.log(f"Invalid retry facility index: {retry_index}. Cannot retry.")
+                            pass
+                    else:
+                        # No retry facility configured, so just log and continue polling
+                        pass
 
             # Progress update every 60 checks
             if check_count % 60 == 0:
@@ -598,10 +807,15 @@ Example:
     parser.add_argument("--date", "-d", default="", help="Booking date (DD/MM/YYYY). If not specified, auto-calculates 8 weeks from today")
     parser.add_argument("--time-start", "-ts", default="", help="Start time (HH:MM:SS). If not specified, uses day-specific time slot")
     parser.add_argument("--time-end", "-te", default="", help="End time (HH:MM:SS). If not specified, uses day-specific time slot")
-    parser.add_argument("--venue-id", default="GxqArR56DGE8ZKkBI2f9", help="Encoded venue ID from URL")
-    parser.add_argument("--facility-id", default="GxqArR56DGE8AQp3sR5Knm0=", help="Encoded facility ID (optional, fetched dynamically)")
-    parser.add_argument("--facility-id-num", type=int, default=477, help="Numeric facility ID")
-    parser.add_argument("--tjk-id", type=int, default=528, help="TJK ID (slot type)")
+    parser.add_argument("--venue-id", default="GxqArR56DGE8ZakBI2f9", help="Encoded venue ID from URL")
+    parser.add_argument("--facility-id", default="GxqArR56DGE8ZGR0sR5Knm0=", help="Encoded facility ID (optional, fetched dynamically)")
+    parser.add_argument("--facility-id-num", type=int, default=114, help="Numeric facility ID (Primary)")
+    parser.add_argument("--tjk-id", type=int, default=624, help="TJK ID (Primary)")
+    parser.add_argument("--retry-facility-index", type=int, default=1, help="Index of secondary facility to retry if primary fails (e.g., 1)")
+    parser.add_argument("--retry-facility-id", default="GxqArR56DGE8ZwNlsR5Knm0=", help="Encoded parameter for secondary facility (from HAR)")
+    parser.add_argument("--retry-facility-id-num", type=int, default=202, help="Numeric ID of secondary facility (Retry)")
+    parser.add_argument("--retry-tjk-id", type=int, default=625, help="TJK ID for secondary facility (Retry)")
+    parser.add_argument("--venue-id-num", type=int, default=2, help="Numeric Venue ID (from idvanue)")
     parser.add_argument("--neg", default="07", help="State code (default: 07)")
     parser.add_argument("--facility-index", type=int, default=0, help="Index of facility from list (default: 0, first one)")
     parser.add_argument("--list-facilities", action="store_true", help="List available facilities and exit")
@@ -610,6 +824,8 @@ Example:
     parser.add_argument("--poll-timeout", type=int, default=3600, help="Max seconds to poll (default: 3600 = 1 hour)")
     parser.add_argument("--check-interval", type=float, default=1.0, help="Seconds between availability checks (default: 1)")
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
+    parser.add_argument("--book-week", action="store_true", help="Book all 5 weekday slots (Mon-Fri) for the week 8 weeks ahead. Used when running on Monday.")
+    parser.add_argument("--day-offset", type=int, default=None, help="Book specific day only (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri). For parallel booking.")
     
     args = parser.parse_args()
 
@@ -626,6 +842,148 @@ Example:
         for i, f in enumerate(facilities):
             print(f"  [{i}] idf={f['facility_id_encoded']}")
         return 0
+
+    # SINGLE DAY MODE (for parallel booking): Book specific day only
+    if args.day_offset is not None:
+        date, time_start, time_end, day_name = get_single_day_target(args.day_offset)
+        print("=" * 50)
+        print(f"SINGLE DAY MODE: Booking {day_name}")
+        print(f"Date: {date} | Time: {time_start}-{time_end}")
+        print("=" * 50)
+        
+        config = {
+            "venue_id": args.venue_id,
+            "facility_id_encoded": args.facility_id,
+            "facility_id": args.facility_id_num,
+            "facility_index": args.facility_index,
+            "tjk_id": args.tjk_id,
+            "retry_facility_index": args.retry_facility_index,
+            "retry_facility_id": args.retry_facility_id,
+            "retry_facility_id_num": args.retry_facility_id_num,
+            "retry_tjk_id": args.retry_tjk_id,
+            "venue_id_num": args.venue_id_num,
+            "date": date,
+            "time_start": time_start,
+            "time_end": time_end,
+            "neg": args.neg,
+            "num_users": args.num_users,
+            "purpose": args.purpose,
+        }
+        
+        result = booker.run(config, poll_timeout=args.poll_timeout, check_interval=args.check_interval)
+        
+        if isinstance(result, dict):
+            success = result.get("success", False)
+            court_name = result.get("court_name", "Unknown")
+        else:
+            success = bool(result)
+            court_name = "Unknown"
+        
+        if success:
+            print(f"✅ {day_name} booked successfully! (Court: {court_name})")
+        else:
+            print(f"❌ {day_name} booking failed.")
+        
+        return 0 if success else 1
+
+    # BOOK WEEK MODE: Book all 5 weekday slots (Mon-Fri)
+    if args.book_week:
+        print("=" * 50)
+        print("BOOK WEEK MODE: Booking Mon-Fri slots")
+        print("=" * 50)
+        
+        weekly_targets = get_weekly_booking_targets()
+        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        print(f"Targets: {len(weekly_targets)} days")
+        for i, (date, ts, te) in enumerate(weekly_targets):
+            print(f"  [{i}] {day_names[i]}: {date} {ts}-{te}")
+        
+        results = []
+        for i, (date, time_start, time_end) in enumerate(weekly_targets):
+            print(f"\n{'='*50}")
+            print(f"[{i+1}/5] Booking {day_names[i]} ({date})")
+            print(f"{'='*50}")
+            
+            config = {
+                "venue_id": args.venue_id,
+                "facility_id_encoded": args.facility_id,
+                "facility_id": args.facility_id_num,
+                "facility_index": args.facility_index,
+                "tjk_id": args.tjk_id,
+                "retry_facility_index": args.retry_facility_index,
+                "retry_facility_id": args.retry_facility_id,
+                "retry_facility_id_num": args.retry_facility_id_num,
+                "retry_tjk_id": args.retry_tjk_id,
+                "venue_id_num": args.venue_id_num,
+                "date": date,
+                "time_start": time_start,
+                "time_end": time_end,
+                "neg": args.neg,
+                "num_users": args.num_users,
+                "purpose": args.purpose,
+            }
+            
+            # For weekly booking, use shorter timeout per slot
+            slot_timeout = min(args.poll_timeout // 5, 600)  # Max 10 min per slot
+            result = booker.run(config, poll_timeout=slot_timeout, check_interval=args.check_interval)
+            
+            # Handle dict return format
+            if isinstance(result, dict):
+                success = result.get("success", False)
+                court_name = result.get("court_name", "Unknown")
+            else:
+                # Fallback for bool return (shouldn't happen but just in case)
+                success = bool(result)
+                court_name = "Unknown"
+            
+            results.append((day_names[i], date, time_start, time_end, success, court_name))
+            
+            # Explicit continuation message regardless of success/failure
+            if success:
+                print(f"✅ {day_names[i]} booked successfully! (Court: {court_name})")
+                # Note: Individual success messages are already sent by booker.run()
+            else:
+                print(f"❌ {day_names[i]} booking failed (both courts unavailable or timeout).")
+            
+            remaining = 5 - (i + 1)
+            if remaining > 0:
+                print(f"➡️  Continuing to next day... ({remaining} remaining)")
+        
+        print("\n" + "=" * 50)
+        print("WEEKLY BOOKING SUMMARY")
+        print("=" * 50)
+        success_count = sum(1 for r in results if r[4])
+        fail_count = len(results) - success_count
+        print(f"Total: {success_count} SUCCESS, {fail_count} FAILED")
+        for day, date, ts, te, success, court in results:
+            status = "✅ SUCCESS" if success else "❌ FAILED"
+            court_info = f" ({court})" if success and court else ""
+            print(f"  {day} ({date}): {status}{court_info}")
+        
+        # Send Telegram summary in detailed format
+        summary_lines = [
+            f"📅 <b>WEEKLY BOOKING SUMMARY</b>",
+            f"Location: Kompleks Sukan KBS",
+            f"Total: {success_count}/5 booked",
+            ""
+        ]
+        for day, date, ts, te, success, court in results:
+            # Calculate hours
+            from datetime import datetime as dt
+            t_start = dt.strptime(ts, "%H:%M:%S")
+            t_end = dt.strptime(te, "%H:%M:%S")
+            hours = int((t_end - t_start).seconds / 3600)
+            
+            status = "✅" if success else "❌"
+            court_info = f" - {court}" if success and court else ""
+            summary_lines.append(f"{status} {day} ({date}){court_info}")
+            summary_lines.append(f"    Time: {ts}-{te} ({hours}h)")
+        
+        booker.send_telegram("\n".join(summary_lines))
+        
+        # Return success if at least one day was booked
+        any_success = any(r[4] for r in results)
+        return 0 if any_success else 1
 
     # Use automatic date/time calculation if not provided
     if not args.date or not args.time_start or not args.time_end:
@@ -648,6 +1006,11 @@ Example:
         "facility_id": args.facility_id_num,
         "facility_index": args.facility_index,
         "tjk_id": args.tjk_id,
+        "retry_facility_index": args.retry_facility_index,
+        "retry_facility_id": args.retry_facility_id,
+        "retry_facility_id_num": args.retry_facility_id_num,
+        "retry_tjk_id": args.retry_tjk_id,
+        "venue_id_num": args.venue_id_num,
         "date": args.date,
         "time_start": args.time_start,
         "time_end": args.time_end,
@@ -655,14 +1018,21 @@ Example:
         "num_users": args.num_users,
         "purpose": args.purpose,
     }
-    success = booker.run(
+    result = booker.run(
         config,
         poll_timeout=args.poll_timeout,
         check_interval=args.check_interval
     )
+    
+    # Handle dict return format
+    if isinstance(result, dict):
+        success = result.get("success", False)
+    else:
+        success = bool(result)
     
     return 0 if success else 1
 
 
 if __name__ == "__main__":
     exit(main())
+
