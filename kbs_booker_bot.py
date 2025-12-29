@@ -557,7 +557,7 @@ class KBSBooker:
             # Check timeout
             if elapsed > poll_timeout:
                 self.log(f"Timeout after {poll_timeout}s ({check_count} checks)")
-                self.send_telegram(f"❌ Booking failed - timeout after {poll_timeout}s")
+                # Skip Telegram notification for timeout - waste of time
                 return {"success": False, "court_name": None}
 
             # Check availability
@@ -578,12 +578,7 @@ class KBSBooker:
                 booking_date = datetime.strptime(config["date"], "%d/%m/%Y")
                 day_name = booking_date.strftime("%A")
                 if not slot_available_notified:
-                    self.send_telegram(
-                        f"🎯 Slot available! Attempting to book...\n"
-                        f"Location: Kompleks Sukan KBS\n"
-                        f"Date: {config['date']} ({day_name})\n"
-                        f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)"
-                    )
+                    # Skip Telegram notification for slot available - proceed directly to booking
                     slot_available_notified = True
 
                 # Refresh token before booking (session may have aged)
