@@ -83,10 +83,10 @@ def get_single_day_target(day_offset: int):
     target_date = target_monday + timedelta(days=day_offset)
     
     time_slots = {
-        0: ("19:00:00", "21:00:00"),  # Monday: 7-9pm
+        0: ("21:00:00", "22:00:00"),  # Monday: 7-9pm
         1: ("19:00:00", "21:00:00"),  # Tuesday: 7-9pm
-        2: ("19:00:00", "21:00:00"),  # Wednesday: 7-9pm
-        3: ("19:00:00", "21:00:00"),  # Thursday: 7-9pm
+        2: ("21:00:00", "22:00:00"),  # Wednesday: 7-9pm
+        3: ("21:00:00", "22:00:00"),  # Thursday: 7-9pm
         4: ("20:00:00", "22:00:00"),  # Friday: 8-10pm
     }
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
