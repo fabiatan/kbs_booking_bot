@@ -976,10 +976,18 @@ Example:
                     time_str = f"    Time: {r['time_start']}-{r['time_end']}"
             
             status = "✅" if r["success"] else "❌"
-            court_info = f" - {r['court_name']}" if r["success"] and r["court_name"] else ""
             date_info = f"({r['date']})" if r['date'] != "???" else ""
             
-            summary_lines.append(f"{status} {r['day_name']} {date_info}{court_info}")
+            # Format:
+            # ✅ Monday (23/02/2026) 
+            #     Venue: Gelanggang Tenis 1
+            #     Time: 21:00:00-22:00:00 (1h)
+            
+            summary_lines.append(f"{status} {r['day_name']} {date_info}")
+            
+            if r["success"] and r["court_name"]:
+                summary_lines.append(f"    Venue: {r['court_name']}")
+            
             if time_str:
                 summary_lines.append(time_str)
             elif r.get("missing"):
