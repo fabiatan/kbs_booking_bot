@@ -416,9 +416,9 @@ class KBSBooker:
             hours = 1
         
         # Calculate total price based on time of day
-        # Daytime (before 7pm/19:00) = RM 10/hour, Nighttime (7pm onwards) = RM 15/hour
-        start_hour = start.hour if 'start' in dir() else 19  # Default to nighttime
-        hourly_rate = 10 if start_hour < 19 else 15
+        # Daytime (before 6pm/18:00) = RM 10/hour, Nighttime (6pm onwards) = RM 15/hour
+        start_hour = start.hour if 'start' in dir() else 18  # Default to nighttime
+        hourly_rate = 10 if start_hour < 18 else 15
         total_price = config.get("total_price") or str(hours * hourly_rate)
         
         # Build form data based on HAR capture
@@ -678,7 +678,7 @@ class KBSBooker:
                     if result.get("booking_id"):
                         self.log("Step 6: Confirming booking...")
                         # Calculate rate based on time of day
-                        hourly_rate = 10 if t_start.hour < 19 else 15
+                        hourly_rate = 10 if t_start.hour < 18 else 15
                         confirm_result = self.confirm_booking(
                             booking_id=result["booking_id"],
                             total_price=str(hours * hourly_rate)
@@ -742,7 +742,7 @@ class KBSBooker:
                                 if retry_result.get("booking_id"):
                                     self.log("Step 6: Confirming retry booking...")
                                     # Calculate rate based on time of day
-                                    hourly_rate = 10 if t_start.hour < 19 else 15
+                                    hourly_rate = 10 if t_start.hour < 18 else 15
                                     confirm_result = self.confirm_booking(
                                         booking_id=retry_result["booking_id"],
                                         total_price=str(hours * hourly_rate)
