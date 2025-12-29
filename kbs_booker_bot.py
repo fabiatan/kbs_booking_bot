@@ -529,17 +529,20 @@ class KBSBooker:
         # Update config with fresh encoded ID
         fresh_facility_id = selected_facility["facility_id_encoded"]
         
-        # Step 3: Get calendar page for ks_token
-        self.log("Step 3: Fetching calendar page for token...")
-        self.get_calendar_page(
-            venue_id=config["venue_id"],
-            facility_id=fresh_facility_id,  # Use fresh ID from facility list
-            neg=config.get("neg", "07")
-        )
-        
-        if not self.ks_token:
-            self.log("ERROR: Could not get ks_token!")
-            return {"success": False, "court_name": None}
+        # Step 3: Get calendar page for ks_token (skip if cached)
+        if self.ks_token:
+            self.log("Step 3: Using cached ks_token, skipping calendar page...")
+        else:
+            self.log("Step 3: Fetching calendar page for token...")
+            self.get_calendar_page(
+                venue_id=config["venue_id"],
+                facility_id=fresh_facility_id,  # Use fresh ID from facility list
+                neg=config.get("neg", "07")
+            )
+            
+            if not self.ks_token:
+                self.log("ERROR: Could not get ks_token!")
+                return {"success": False, "court_name": None}
         
         # Step 4: Poll for availability
         self.log(f"Step 4: Polling for availability (timeout: {poll_timeout}s, interval: {check_interval}s)...")
