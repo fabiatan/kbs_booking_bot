@@ -61,6 +61,40 @@ def get_weekly_booking_targets():
     return targets
 
 
+def get_single_day_target(day_offset: int):
+    """
+    Calculate booking target for a specific day, 8 weeks from now.
+    Used for parallel booking where each job books one day.
+    
+    Args:
+        day_offset: 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday
+    
+    Returns:
+        tuple: (date_str, time_start, time_end, day_name)
+    """
+    if day_offset < 0 or day_offset > 4:
+        raise ValueError(f"day_offset must be 0-4, got {day_offset}")
+    
+    today = datetime.now()
+    future_date = today + timedelta(weeks=8)
+    target_monday = future_date - timedelta(days=future_date.weekday())
+    target_date = target_monday + timedelta(days=day_offset)
+    
+    time_slots = {
+        0: ("19:00:00", "21:00:00"),  # Monday: 7-9pm
+        1: ("19:00:00", "21:00:00"),  # Tuesday: 7-9pm
+        2: ("19:00:00", "21:00:00"),  # Wednesday: 7-9pm
+        3: ("19:00:00", "21:00:00"),  # Thursday: 7-9pm
+        4: ("20:00:00", "22:00:00"),  # Friday: 8-10pm
+    }
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    
+    time_start, time_end = time_slots[day_offset]
+    date_str = target_date.strftime("%d/%m/%Y")
+    
+    return (date_str, time_start, time_end, day_names[day_offset])
+
+
 def get_booking_target():
     """
     Calculate booking target: 8 weeks from today with day-specific time slots.
@@ -791,6 +825,7 @@ Example:
     parser.add_argument("--check-interval", type=float, default=1.0, help="Seconds between availability checks (default: 1)")
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
     parser.add_argument("--book-week", action="store_true", help="Book all 5 weekday slots (Mon-Fri) for the week 8 weeks ahead. Used when running on Monday.")
+    parser.add_argument("--day-offset", type=int, default=None, help="Book specific day only (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri). For parallel booking.")
     
     args = parser.parse_args()
 
@@ -807,6 +842,49 @@ Example:
         for i, f in enumerate(facilities):
             print(f"  [{i}] idf={f['facility_id_encoded']}")
         return 0
+
+    # SINGLE DAY MODE (for parallel booking): Book specific day only
+    if args.day_offset is not None:
+        date, time_start, time_end, day_name = get_single_day_target(args.day_offset)
+        print("=" * 50)
+        print(f"SINGLE DAY MODE: Booking {day_name}")
+        print(f"Date: {date} | Time: {time_start}-{time_end}")
+        print("=" * 50)
+        
+        config = {
+            "venue_id": args.venue_id,
+            "facility_id_encoded": args.facility_id,
+            "facility_id": args.facility_id_num,
+            "facility_index": args.facility_index,
+            "tjk_id": args.tjk_id,
+            "retry_facility_index": args.retry_facility_index,
+            "retry_facility_id": args.retry_facility_id,
+            "retry_facility_id_num": args.retry_facility_id_num,
+            "retry_tjk_id": args.retry_tjk_id,
+            "venue_id_num": args.venue_id_num,
+            "date": date,
+            "time_start": time_start,
+            "time_end": time_end,
+            "neg": args.neg,
+            "num_users": args.num_users,
+            "purpose": args.purpose,
+        }
+        
+        result = booker.run(config, poll_timeout=args.poll_timeout, check_interval=args.check_interval)
+        
+        if isinstance(result, dict):
+            success = result.get("success", False)
+            court_name = result.get("court_name", "Unknown")
+        else:
+            success = bool(result)
+            court_name = "Unknown"
+        
+        if success:
+            print(f"✅ {day_name} booked successfully! (Court: {court_name})")
+        else:
+            print(f"❌ {day_name} booking failed.")
+        
+        return 0 if success else 1
 
     # BOOK WEEK MODE: Book all 5 weekday slots (Mon-Fri)
     if args.book_week:
