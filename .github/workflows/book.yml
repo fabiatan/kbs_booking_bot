@@ -2,7 +2,7 @@ name: KBS Booking Bot
 
 on:
   schedule:
-    - cron: '10 23 * * 0-4'  # 7:10 AM MYT on Monday-friday only (runs Sun 23:10 UTC)
+    - cron: '10 0 * * 1-5'  # 8:10 AM MYT on Monday-friday only (runs Mon-Fri 00:10 UTC)
   workflow_dispatch:
     inputs:
       poll_timeout:
@@ -37,7 +37,7 @@ jobs:
       - run: pip install requests
       
       - name: Stagger job start to prevent cart accumulation
-        run: sleep $((${{ matrix.day_offset }} * 15))
+        run: sleep $((${{ matrix.day_offset }} * 10))
       
       - name: Run booking bot (Day ${{ matrix.day_offset }})
         env:
