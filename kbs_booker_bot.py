@@ -166,6 +166,35 @@ class KBSBooker:
         except Exception as e:
             self.log(f"Telegram notification failed: {e}")
     
+    def calculate_price(self, start_time_str: str, end_time_str: str) -> str:
+        """
+        Calculate total price based on hourly rates:
+        - 7:00 AM to 7:00 PM (19:00): RM 10 per hour
+        - 7:00 PM (19:00) onwards: RM 15 per hour
+        """
+        try:
+            start = datetime.strptime(start_time_str, "%H:%M:%S")
+            end = datetime.strptime(end_time_str, "%H:%M:%S")
+            
+            total = 0
+            current = start
+            
+            # Iterate through each hour block
+            while current < end:
+                # If the current hour block starts between 7am (inclusive) and 7pm (exclusive) -> RM 10
+                # "7am-7pm is rm10" means 07:00-08:00 ... 18:00-19:00 are RM 10.
+                if 7 <= current.hour < 19:
+                    total += 10
+                else:
+                    total += 15
+                
+                current += timedelta(hours=1)
+                
+            return str(total)
+        except Exception as e:
+            self.log(f"Error calculating price: {e}")
+            return "15"  # Fallback
+    
     def login(self) -> bool:
         """
         Login to KBS system
@@ -415,11 +444,8 @@ class KBSBooker:
         except:
             hours = 1
         
-        # Calculate total price based on time of day
-        # Daytime (before 7pm/19:00) = RM 10/hour, Nighttime (7pm onwards) = RM 15/hour
-        start_hour = start.hour if 'start' in dir() else 19  # Default to nighttime
-        hourly_rate = 10 if start_hour < 19 else 15
-        total_price = config.get("total_price") or str(hours * hourly_rate)
+        # Calculate total price based on variable hourly rates
+        total_price = config.get("total_price") or self.calculate_price(config["time_start"], config["time_end"])
         
         # Build form data based on HAR capture
         data = {
@@ -677,11 +703,11 @@ class KBSBooker:
                     # Confirm booking
                     if result.get("booking_id"):
                         self.log("Step 6: Confirming booking...")
-                        # Calculate rate based on time of day
-                        hourly_rate = 10 if t_start.hour < 19 else 15
+                        # Calculate rate dynamically
+                        calculated_price = self.calculate_price(config["time_start"], config["time_end"])
                         confirm_result = self.confirm_booking(
                             booking_id=result["booking_id"],
-                            total_price=str(hours * hourly_rate)
+                            total_price=calculated_price
                         )
                         if confirm_result["success"]:
                             self.log(f"CONFIRMED! {confirm_result['url']}")
@@ -741,11 +767,11 @@ class KBSBooker:
 
                                 if retry_result.get("booking_id"):
                                     self.log("Step 6: Confirming retry booking...")
-                                    # Calculate rate based on time of day
-                                    hourly_rate = 10 if t_start.hour < 19 else 15
+                                    # Calculate rate dynamically
+                                    calculated_price = self.calculate_price(config["time_start"], config["time_end"])
                                     confirm_result = self.confirm_booking(
                                         booking_id=retry_result["booking_id"],
-                                        total_price=str(hours * hourly_rate)
+                                        total_price=calculated_price
                                     )
                                     if confirm_result["success"]:
                                         self.log(f"CONFIRMED! {confirm_result['url']}")
