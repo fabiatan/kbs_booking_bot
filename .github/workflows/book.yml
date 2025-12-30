@@ -35,6 +35,10 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install requests
+      
+      - name: Stagger job start to prevent cart accumulation
+        run: sleep $((${{ matrix.day_offset }} * 15))
+      
       - name: Run booking bot (Day ${{ matrix.day_offset }})
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
