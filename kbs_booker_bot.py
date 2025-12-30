@@ -972,12 +972,14 @@ Example:
                 final_results[offset] = r
                 final_results[offset]["missing"] = False
         
-        # Build the message
+        # Build the message and calculate total price
+        total_price = 0
         for i in range(5):
             r = final_results[i]
             
             # Calculate hours if times available
             time_str = ""
+            hours = 0
             if r["time_start"] != "??:??:??":
                 try:
                     from datetime import datetime as dt
@@ -985,6 +987,12 @@ Example:
                     t_end = dt.strptime(r["time_end"], "%H:%M:%S")
                     hours = int((t_end - t_start).seconds / 3600)
                     time_str = f"    Time: {r['time_start']}-{r['time_end']} ({hours}h)"
+                    
+                    # Calculate price for successful bookings
+                    if r["success"]:
+                        # Daytime (before 6pm/18:00) = RM 10/hour, Nighttime (6pm onwards) = RM 15/hour
+                        hourly_rate = 10 if t_start.hour < 18 else 15
+                        total_price += hours * hourly_rate
                 except:
                     time_str = f"    Time: {r['time_start']}-{r['time_end']}"
             
@@ -1005,6 +1013,11 @@ Example:
                 summary_lines.append(time_str)
             elif r.get("missing"):
                 summary_lines.append("    (Job failed or result missing)")
+        
+        # Add total price to summary
+        if total_price > 0:
+            summary_lines.append("")
+            summary_lines.append(f"💰 Total: RM {total_price}")
         
         full_message = "\n".join(summary_lines)
         print(full_message)
@@ -1093,6 +1106,7 @@ Example:
             f"Total: {success_count}/5 booked",
             ""
         ]
+        total_price = 0
         for day, date, ts, te, success, court in results:
             # Calculate hours
             from datetime import datetime as dt
@@ -1100,10 +1114,21 @@ Example:
             t_end = dt.strptime(te, "%H:%M:%S")
             hours = int((t_end - t_start).seconds / 3600)
             
+            # Calculate price for successful bookings
+            if success:
+                # Daytime (before 6pm/18:00) = RM 10/hour, Nighttime (6pm onwards) = RM 15/hour
+                hourly_rate = 10 if t_start.hour < 18 else 15
+                total_price += hours * hourly_rate
+            
             status = "✅" if success else "❌"
             court_info = f" - {court}" if success and court else ""
             summary_lines.append(f"{status} {day} ({date}){court_info}")
             summary_lines.append(f"    Time: {ts}-{te} ({hours}h)")
+        
+        # Add total price to summary
+        if total_price > 0:
+            summary_lines.append("")
+            summary_lines.append(f"💰 Total: RM {total_price}")
         
         booker.send_telegram("\n".join(summary_lines))
         
