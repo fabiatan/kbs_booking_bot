@@ -1,0 +1,30 @@
+name: Book March 1st 2026
+
+on:
+  schedule:
+    - cron: '58 15 30 12 *'  # 11:58 PM MYT on Dec 30 (15:58 UTC)
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  book-march1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      
+      - name: Book March 1st 2026 (Sunday 7-9am)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python kbs_booker_bot.py \
+            -u "${{ secrets.KBS_USERNAME }}" \
+            -p "${{ secrets.KBS_PASSWORD }}" \
+            -d "01/03/2026" \
+            -ts "07:00:00" \
+            -te "09:00:00" \
+            --poll-timeout 300
