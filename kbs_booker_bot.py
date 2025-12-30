@@ -742,7 +742,7 @@ class KBSBooker:
                                 if retry_result.get("booking_id"):
                                     self.log("Step 6: Confirming retry booking...")
                                     # Calculate rate based on time of day
-                                    hourly_rate = 10 if t_start.hour < 19 else 15
+                                    hourly_rate = 10 if t_start.hour <= 19 else 15
                                     confirm_result = self.confirm_booking(
                                         booking_id=retry_result["booking_id"],
                                         total_price=str(hours * hourly_rate)
