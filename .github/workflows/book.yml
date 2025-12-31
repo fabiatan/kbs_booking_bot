@@ -2,13 +2,13 @@ name: KBS Booking Bot
 
 on:
   schedule:
-    - cron: '10 0 * * 1-5'  # 8:10 AM MYT on Monday-friday only (runs Mon-Fri 00:10 UTC)
+    - cron: '30 23 * * 0-4'  # 07:30 AM MYT on Monday-friday only
   workflow_dispatch:
     inputs:
       poll_timeout:
         description: 'Poll timeout in seconds'
         required: false
-        default: '20'
+        default: '3600'
         type: string
       parallel:
         description: 'Use parallel booking (5 jobs)'
@@ -49,7 +49,7 @@ jobs:
             -p "${{ secrets.KBS_PASSWORD }}" \
             --day-offset ${{ matrix.day_offset }} \
             ${{ inputs.date != '' && format('-d "{0}"', inputs.date) || '' }} \
-            --poll-timeout ${{ inputs.poll_timeout || '20' }}
+            --poll-timeout ${{ inputs.poll_timeout }}
       
       - name: Upload result
         if: always() # Upload even if booking fails

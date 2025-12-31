@@ -546,7 +546,7 @@ class KBSBooker:
         # Step 2: Get facility IDs (use cache if available)
         # If venue is closed/unavailable, poll until facilities appear
         venue_poll_interval = 3.0  # seconds between venue checks
-        venue_poll_timeout = min(poll_timeout, 3000)  # Max 50 minutes for venue polling
+        venue_poll_timeout = poll_timeout  # Use same timeout as slot polling
         
         if self._cached_facilities:
             self.log("Step 2: Using cached facility list...")
