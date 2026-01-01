@@ -21,8 +21,22 @@ import re
 import time
 import json
 import glob
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import argparse
+
+# Centralized time slot configuration (day_offset: (start, end))
+# 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday
+TIME_SLOTS = {
+    0: ("21:00:00", "22:00:00"),  # Monday: 9-10pm (1 hour)
+    1: ("19:00:00", "21:00:00"),  # Tuesday: 7-9pm (2 hours)
+    2: ("19:00:00", "21:00:00"),  # Wednesday: 7-9pm (2 hours)
+    3: ("19:00:00", "21:00:00"),  # Thursday: 7-9pm (2 hours)
+    4: ("20:00:00", "22:00:00"),  # Friday: 8-10pm (2 hours)
+}
+DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+
+# Malaysia timezone (UTC+8) - ensures correct date calculation on GitHub Actions
+MYT = timezone(timedelta(hours=8))
 
 
 def get_weekly_booking_targets():
@@ -38,25 +52,17 @@ def get_weekly_booking_targets():
     Returns:
         list of tuples: [(date_str, time_start, time_end), ...] for Mon-Fri
     """
-    today = datetime.now()
+    today = datetime.now(MYT)
     
     # Calculate 8 weeks from today, then find the Monday of that week
     future_date = today + timedelta(weeks=8)
     # Subtract the weekday to get to Monday (weekday() returns 0 for Monday)
     target_monday = future_date - timedelta(days=future_date.weekday())
     
-    time_slots = {
-        0: ("19:00:00", "21:00:00"),  # Monday: 7-9pm
-        1: ("19:00:00", "21:00:00"),  # Tuesday: 7-9pm
-        2: ("19:00:00", "21:00:00"),  # Wednesday: 7-9pm
-        3: ("19:00:00", "21:00:00"),  # Thursday: 7-9pm
-        4: ("20:00:00", "22:00:00"),  # Friday: 8-10pm
-    }
-    
     targets = []
     for day_offset in range(5):  # Mon=0 to Fri=4
         target_date = target_monday + timedelta(days=day_offset)
-        time_start, time_end = time_slots[day_offset]
+        time_start, time_end = TIME_SLOTS[day_offset]
         date_str = target_date.strftime("%d/%m/%Y")
         targets.append((date_str, time_start, time_end))
     
@@ -77,24 +83,17 @@ def get_single_day_target(day_offset: int):
     if day_offset < 0 or day_offset > 4:
         raise ValueError(f"day_offset must be 0-4, got {day_offset}")
     
-    today = datetime.now()
+    today = datetime.now(MYT)
     future_date = today + timedelta(weeks=8)
     target_monday = future_date - timedelta(days=future_date.weekday())
     target_date = target_monday + timedelta(days=day_offset)
     
-    time_slots = {
-        0: ("21:00:00", "22:00:00"),  # Monday: 7-9pm
-        1: ("19:00:00", "21:00:00"),  # Tuesday: 7-9pm
-        2: ("19:00:00", "21:00:00"),  # Wednesday: 7-9pm
-        3: ("19:00:00", "21:00:00"),  # Thursday: 7-9pm
-        4: ("20:00:00", "22:00:00"),  # Friday: 8-10pm
-    }
-    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+
     
-    time_start, time_end = time_slots[day_offset]
+    time_start, time_end = TIME_SLOTS[day_offset]
     date_str = target_date.strftime("%d/%m/%Y")
     
-    return (date_str, time_start, time_end, day_names[day_offset])
+    return (date_str, time_start, time_end, DAY_NAMES[day_offset])
 
 
 def get_booking_target():
@@ -109,23 +108,17 @@ def get_booking_target():
     Returns:
         tuple: (date_str in DD/MM/YYYY, time_start, time_end) or None if weekend
     """
-    today = datetime.now()
+    today = datetime.now(MYT)
     target_date = today + timedelta(weeks=8)
 
     day_of_week = target_date.weekday()
 
-    time_slots = {
-        0: ("19:00:00", "21:00:00"),  # Monday: 7-9pm
-        1: ("19:00:00", "21:00:00"),  # Tuesday: 7-9pm
-        2: ("19:00:00", "21:00:00"),  # Wednesday: 7-9pm
-        3: ("19:00:00", "21:00:00"),  # Thursday: 7-9pm
-        4: ("20:00:00", "22:00:00"),  # Friday: 8-10pm
-    }
 
-    if day_of_week not in time_slots:
+
+    if day_of_week not in TIME_SLOTS:
         return None  # Weekend - no booking
 
-    time_start, time_end = time_slots[day_of_week]
+    time_start, time_end = TIME_SLOTS[day_of_week]
     date_str = target_date.strftime("%d/%m/%Y")
 
     return (date_str, time_start, time_end)
