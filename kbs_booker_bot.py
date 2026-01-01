@@ -27,7 +27,7 @@ import argparse
 # Centralized time slot configuration (day_offset: (start, end))
 # 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday
 TIME_SLOTS = {
-    0: ("21:00:00", "22:00:00"),  # Monday: 9-10pm (1 hour)
+    0: ("21:00:00", "22:00:00"),  # Monday: 7-9pm (2 hours)
     1: ("19:00:00", "21:00:00"),  # Tuesday: 7-9pm (2 hours)
     2: ("19:00:00", "21:00:00"),  # Wednesday: 7-9pm (2 hours)
     3: ("19:00:00", "21:00:00"),  # Thursday: 7-9pm (2 hours)
@@ -38,90 +38,101 @@ DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 # Malaysia timezone (UTC+8) - ensures correct date calculation on GitHub Actions
 MYT = timezone(timedelta(hours=8))
 
-
-def get_weekly_booking_targets():
+def get_booking_target(day_offset=None):
     """
-    Calculate booking targets for the entire week (Mon-Fri), 8 weeks from now.
-    
-    This is used when running on Monday to book all 5 weekday slots at once.
-    
-    Time slots:
-    - Monday-Thursday: 7-9pm (19:00-21:00)
-    - Friday: 8-10pm (20:00-22:00)
-
-    Returns:
-        list of tuples: [(date_str, time_start, time_end), ...] for Mon-Fri
-    """
-    today = datetime.now(MYT)
-    
-    # Calculate 8 weeks from today, then find the Monday of that week
-    future_date = today + timedelta(weeks=8)
-    # Subtract the weekday to get to Monday (weekday() returns 0 for Monday)
-    target_monday = future_date - timedelta(days=future_date.weekday())
-    
-    targets = []
-    for day_offset in range(5):  # Mon=0 to Fri=4
-        target_date = target_monday + timedelta(days=day_offset)
-        time_start, time_end = TIME_SLOTS[day_offset]
-        date_str = target_date.strftime("%d/%m/%Y")
-        targets.append((date_str, time_start, time_end))
-    
-    return targets
-
-
-def get_single_day_target(day_offset: int):
-    """
-    Calculate booking target for a specific day, 8 weeks from now.
-    Used for parallel booking where each job books one day.
+    Calculate booking target(s) for 8 weeks from now.
     
     Args:
-        day_offset: 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday
+        day_offset: 
+            - None: Auto-detect based on today's weekday (returns None for weekend)
+            - 0-4: Specific day (0=Monday to 4=Friday)
+            - -1: Return all 5 weekdays as a list
     
     Returns:
-        tuple: (date_str, time_start, time_end, day_name)
+        - If day_offset is None or 0-4: tuple (date_str, time_start, time_end, day_name) or None for weekend
+        - If day_offset is -1: list of tuples [(date_str, time_start, time_end, day_name), ...]
     """
-    if day_offset < 0 or day_offset > 4:
-        raise ValueError(f"day_offset must be 0-4, got {day_offset}")
-    
     today = datetime.now(MYT)
     future_date = today + timedelta(weeks=8)
     target_monday = future_date - timedelta(days=future_date.weekday())
-    target_date = target_monday + timedelta(days=day_offset)
     
-
+    def _get_day_target(offset):
+        target_date = target_monday + timedelta(days=offset)
+        time_start, time_end = TIME_SLOTS[offset]
+        date_str = target_date.strftime("%d/%m/%Y")
+        return (date_str, time_start, time_end, DAY_NAMES[offset])
     
-    time_start, time_end = TIME_SLOTS[day_offset]
-    date_str = target_date.strftime("%d/%m/%Y")
+    # Return all weekdays
+    if day_offset == -1:
+        return [_get_day_target(i) for i in range(5)]
     
-    return (date_str, time_start, time_end, DAY_NAMES[day_offset])
+    # Auto-detect from today's weekday
+    if day_offset is None:
+        day_of_week = future_date.weekday()
+        if day_of_week not in TIME_SLOTS:
+            return None  # Weekend - no booking
+        return _get_day_target(day_of_week)
+    
+    # Specific day offset
+    if day_offset < 0 or day_offset > 4:
+        raise ValueError(f"day_offset must be -1, None, or 0-4, got {day_offset}")
+    return _get_day_target(day_offset)
 
 
-def get_booking_target():
+def build_config(args, date: str, time_start: str, time_end: str) -> dict:
     """
-    Calculate booking target: 8 weeks from today with day-specific time slots.
-    (Legacy single-day function for backward compatibility)
-
-    Time slots:
-    - Monday-Thursday: 7-9pm (19:00-21:00)
-    - Friday: 8-10pm (20:00-22:00)
-
+    Build booking configuration dict from CLI args and booking target.
+    
+    Args:
+        args: Parsed argparse namespace
+        date: Booking date in DD/MM/YYYY format
+        time_start: Start time HH:MM:SS
+        time_end: End time HH:MM:SS
+    
     Returns:
-        tuple: (date_str in DD/MM/YYYY, time_start, time_end) or None if weekend
+        dict: Configuration for KBSBooker.run()
     """
-    today = datetime.now(MYT)
-    target_date = today + timedelta(weeks=8)
+    return {
+        "venue_id": args.venue_id,
+        "facility_id_encoded": args.facility_id,
+        "facility_id": args.facility_id_num,
+        "facility_index": args.facility_index,
+        "tjk_id": args.tjk_id,
+        "retry_facility_index": args.retry_facility_index,
+        "retry_facility_id": args.retry_facility_id,
+        "retry_facility_id_num": args.retry_facility_id_num,
+        "retry_tjk_id": args.retry_tjk_id,
+        "venue_id_num": args.venue_id_num,
+        "date": date,
+        "time_start": time_start,
+        "time_end": time_end,
+        "neg": args.neg,
+        "num_users": args.num_users,
+        "purpose": args.purpose,
+    }
 
-    day_of_week = target_date.weekday()
 
-
-
-    if day_of_week not in TIME_SLOTS:
-        return None  # Weekend - no booking
-
-    time_start, time_end = TIME_SLOTS[day_of_week]
-    date_str = target_date.strftime("%d/%m/%Y")
-
-    return (date_str, time_start, time_end)
+def calculate_booking_price(time_start: str, time_end: str) -> tuple:
+    """
+    Calculate booking price based on time of day.
+    
+    Rates:
+        - Daytime (before 7pm/19:00): RM 10/hour
+        - Nighttime (7pm onwards): RM 15/hour
+    
+    Args:
+        time_start: Start time in HH:MM:SS format
+        time_end: End time in HH:MM:SS format
+    
+    Returns:
+        tuple: (hours, total_price, hourly_rate)
+    """
+    t_start = datetime.strptime(time_start, "%H:%M:%S")
+    t_end = datetime.strptime(time_end, "%H:%M:%S")
+    hours = int((t_end - t_start).seconds / 3600)
+    hourly_rate = 10 if t_start.hour < 19 else 15
+    total_price = hours * hourly_rate
+    return (hours, total_price, hourly_rate)
 
 
 class KBSBooker:
@@ -401,18 +412,9 @@ class KBSBooker:
         url = f"{self.BASE_URL}/t_tempahan/tempahan_addhandler.php"
         
         # Calculate hours
-        try:
-            start = datetime.strptime(config["time_start"], "%H:%M:%S")
-            end = datetime.strptime(config["time_end"], "%H:%M:%S")
-            hours = int((end - start).seconds / 3600)
-        except:
-            hours = 1
-        
-        # Calculate total price based on time of day
-        # Daytime (before 7pm/19:00) = RM 10/hour, Nighttime (7pm onwards) = RM 15/hour
-        start_hour = start.hour if 'start' in dir() else 19  # Default to nighttime
-        hourly_rate = 10 if start_hour < 19 else 15
-        total_price = config.get("total_price") or str(hours * hourly_rate)
+        # Calculate hours and price
+        hours, total_price_calc, _ = calculate_booking_price(config["time_start"], config["time_end"])
+        total_price = config.get("total_price") or str(total_price_calc)
         
         # Build form data based on HAR capture
         data = {
@@ -670,11 +672,10 @@ class KBSBooker:
                     # Confirm booking
                     if result.get("booking_id"):
                         self.log("Step 6: Confirming booking...")
-                        # Calculate rate based on time of day
-                        hourly_rate = 10 if t_start.hour < 19 else 15
+                        _, total_price_calc, _ = calculate_booking_price(config["time_start"], config["time_end"])
                         confirm_result = self.confirm_booking(
                             booking_id=result["booking_id"],
-                            total_price=str(hours * hourly_rate)
+                            total_price=str(total_price_calc)
                         )
                         if confirm_result["success"]:
                             self.log(f"CONFIRMED! {confirm_result['url']}")
@@ -734,11 +735,10 @@ class KBSBooker:
 
                                 if retry_result.get("booking_id"):
                                     self.log("Step 6: Confirming retry booking...")
-                                    # Calculate rate based on time of day
-                                    hourly_rate = 10 if t_start.hour <= 19 else 15
+                                    hours, total_price_calc, _ = calculate_booking_price(config["time_start"], config["time_end"])
                                     confirm_result = self.confirm_booking(
                                         booking_id=retry_result["booking_id"],
-                                        total_price=str(hours * hourly_rate)
+                                        total_price=str(total_price_calc)
                                     )
                                     if confirm_result["success"]:
                                         self.log(f"CONFIRMED! {confirm_result['url']}")
@@ -854,30 +854,13 @@ Example:
 
     # SINGLE DAY MODE (for parallel booking): Book specific day only
     if args.day_offset is not None:
-        date, time_start, time_end, day_name = get_single_day_target(args.day_offset)
+        date, time_start, time_end, day_name = get_booking_target(args.day_offset)
         print("=" * 50)
         print(f"SINGLE DAY MODE: Booking {day_name}")
         print(f"Date: {date} | Time: {time_start}-{time_end}")
         print("=" * 50)
         
-        config = {
-            "venue_id": args.venue_id,
-            "facility_id_encoded": args.facility_id,
-            "facility_id": args.facility_id_num,
-            "facility_index": args.facility_index,
-            "tjk_id": args.tjk_id,
-            "retry_facility_index": args.retry_facility_index,
-            "retry_facility_id": args.retry_facility_id,
-            "retry_facility_id_num": args.retry_facility_id_num,
-            "retry_tjk_id": args.retry_tjk_id,
-            "venue_id_num": args.venue_id_num,
-            "date": date,
-            "time_start": time_start,
-            "time_end": time_end,
-            "neg": args.neg,
-            "num_users": args.num_users,
-            "purpose": args.purpose,
-        }
+        config = build_config(args, date, time_start, time_end)
         
         result = booker.run(config, poll_timeout=args.poll_timeout, check_interval=args.check_interval)
         
@@ -975,17 +958,12 @@ Example:
             hours = 0
             if r["time_start"] != "??:??:??":
                 try:
-                    from datetime import datetime as dt
-                    t_start = dt.strptime(r["time_start"], "%H:%M:%S")
-                    t_end = dt.strptime(r["time_end"], "%H:%M:%S")
-                    hours = int((t_end - t_start).seconds / 3600)
+                    hours, price_calc, _ = calculate_booking_price(r["time_start"], r["time_end"])
                     time_str = f"    Time: {r['time_start']}-{r['time_end']} ({hours}h)"
                     
                     # Calculate price for successful bookings
                     if r["success"]:
-                        # Daytime (before 6pm/18:00) = RM 10/hour, Nighttime (6pm onwards) = RM 15/hour
-                        hourly_rate = 10 if t_start.hour < 18 else 15
-                        total_price += hours * hourly_rate
+                        total_price += price_calc
                 except:
                     time_str = f"    Time: {r['time_start']}-{r['time_end']}"
             
@@ -1024,36 +1002,18 @@ Example:
         print("BOOK WEEK MODE: Booking Mon-Fri slots")
         print("=" * 50)
         
-        weekly_targets = get_weekly_booking_targets()
-        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        weekly_targets = get_booking_target(-1)  # Get all 5 days
         print(f"Targets: {len(weekly_targets)} days")
-        for i, (date, ts, te) in enumerate(weekly_targets):
-            print(f"  [{i}] {day_names[i]}: {date} {ts}-{te}")
+        for i, (date, ts, te, day_name) in enumerate(weekly_targets):
+            print(f"  [{i}] {day_name}: {date} {ts}-{te}")
         
         results = []
-        for i, (date, time_start, time_end) in enumerate(weekly_targets):
+        for i, (date, time_start, time_end, day_name) in enumerate(weekly_targets):
             print(f"\n{'='*50}")
-            print(f"[{i+1}/5] Booking {day_names[i]} ({date})")
+            print(f"[{i+1}/5] Booking {day_name} ({date})")
             print(f"{'='*50}")
             
-            config = {
-                "venue_id": args.venue_id,
-                "facility_id_encoded": args.facility_id,
-                "facility_id": args.facility_id_num,
-                "facility_index": args.facility_index,
-                "tjk_id": args.tjk_id,
-                "retry_facility_index": args.retry_facility_index,
-                "retry_facility_id": args.retry_facility_id,
-                "retry_facility_id_num": args.retry_facility_id_num,
-                "retry_tjk_id": args.retry_tjk_id,
-                "venue_id_num": args.venue_id_num,
-                "date": date,
-                "time_start": time_start,
-                "time_end": time_end,
-                "neg": args.neg,
-                "num_users": args.num_users,
-                "purpose": args.purpose,
-            }
+            config = build_config(args, date, time_start, time_end)
             
             # For weekly booking, use shorter timeout per slot
             slot_timeout = min(args.poll_timeout // 5, 600)  # Max 10 min per slot
@@ -1068,14 +1028,14 @@ Example:
                 success = bool(result)
                 court_name = "Unknown"
             
-            results.append((day_names[i], date, time_start, time_end, success, court_name))
+            results.append((day_name, date, time_start, time_end, success, court_name))
             
             # Explicit continuation message regardless of success/failure
             if success:
-                print(f"✅ {day_names[i]} booked successfully! (Court: {court_name})")
+                print(f"✅ {day_name} booked successfully! (Court: {court_name})")
                 # Note: Individual success messages are already sent by booker.run()
             else:
-                print(f"❌ {day_names[i]} booking failed (both courts unavailable or timeout).")
+                print(f"❌ {day_name} booking failed (both courts unavailable or timeout).")
             
             remaining = 5 - (i + 1)
             if remaining > 0:
@@ -1101,17 +1061,11 @@ Example:
         ]
         total_price = 0
         for day, date, ts, te, success, court in results:
-            # Calculate hours
-            from datetime import datetime as dt
-            t_start = dt.strptime(ts, "%H:%M:%S")
-            t_end = dt.strptime(te, "%H:%M:%S")
-            hours = int((t_end - t_start).seconds / 3600)
+            hours, price_calc, _ = calculate_booking_price(ts, te)
             
             # Calculate price for successful bookings
             if success:
-                # Daytime (before 6pm/18:00) = RM 10/hour, Nighttime (6pm onwards) = RM 15/hour
-                hourly_rate = 10 if t_start.hour < 18 else 15
-                total_price += hours * hourly_rate
+                total_price += price_calc
             
             status = "✅" if success else "❌"
             court_info = f" - {court}" if success and court else ""
@@ -1131,11 +1085,11 @@ Example:
 
     # Use automatic date/time calculation if not provided
     if not args.date or not args.time_start or not args.time_end:
-        target = get_booking_target()
+        target = get_booking_target()  # Auto-detect from today's weekday
         if target is None:
             print("ERROR: Target date is a weekend. No booking scheduled.")
             return 1
-        auto_date, auto_time_start, auto_time_end = target
+        auto_date, auto_time_start, auto_time_end, _ = target  # Ignore day_name
         if not args.date:
             args.date = auto_date
         if not args.time_start:
@@ -1144,24 +1098,7 @@ Example:
             args.time_end = auto_time_end
         print(f"Auto-calculated booking: {args.date} {args.time_start}-{args.time_end}")
 
-    config = {
-        "venue_id": args.venue_id,
-        "facility_id_encoded": args.facility_id,
-        "facility_id": args.facility_id_num,
-        "facility_index": args.facility_index,
-        "tjk_id": args.tjk_id,
-        "retry_facility_index": args.retry_facility_index,
-        "retry_facility_id": args.retry_facility_id,
-        "retry_facility_id_num": args.retry_facility_id_num,
-        "retry_tjk_id": args.retry_tjk_id,
-        "venue_id_num": args.venue_id_num,
-        "date": args.date,
-        "time_start": args.time_start,
-        "time_end": args.time_end,
-        "neg": args.neg,
-        "num_users": args.num_users,
-        "purpose": args.purpose,
-    }
+    config = build_config(args, args.date, args.time_start, args.time_end)
     result = booker.run(
         config,
         poll_timeout=args.poll_timeout,
