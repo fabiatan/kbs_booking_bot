@@ -49,7 +49,7 @@ jobs:
             -p "${{ secrets.KBS_PASSWORD }}" \
             --day-offset ${{ matrix.day_offset }} \
             ${{ inputs.date != '' && format('-d "{0}"', inputs.date) || '' }} \
-            --poll-timeout ${{ inputs.poll_timeout }}
+            ${{ inputs.poll_timeout && format('--poll-timeout {0}', inputs.poll_timeout) || '' }}
       
       - name: Upload result
         if: always() # Upload even if booking fails
