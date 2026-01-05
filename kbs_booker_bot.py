@@ -766,7 +766,7 @@ class KBSBooker:
                                     )
                                 return {"success": True, "court_name": retry_name}  # EXIT after successful backup booking
                             else:
-                                self.log(f"Retry booking with facility index {retry_index} also failed.")
+                                self.log(f"Secondary booking with facility index {retry_index} also failed.")
                                 # self.send_telegram(f"❌ Booking failed - primary and retry facilities failed.")
                                 # Don't exit here, maybe primary becomes available? Or just fail?
                                 # If fast book, we might loop. If standard, we loop.
