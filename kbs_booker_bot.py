@@ -38,22 +38,23 @@ DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 # Malaysia timezone (UTC+8) - ensures correct date calculation on GitHub Actions
 MYT = timezone(timedelta(hours=8))
 
-def get_booking_target(day_offset=None):
+def get_booking_target(day_offset=None, weeks_ahead=8):
     """
-    Calculate booking target(s) for 8 weeks from now.
+    Calculate booking target(s) for N weeks from now.
     
     Args:
         day_offset: 
             - None: Auto-detect based on today's weekday (returns None for weekend)
             - 0-4: Specific day (0=Monday to 4=Friday)
             - -1: Return all 5 weekdays as a list
+        weeks_ahead: Number of weeks to look ahead (default: 8)
     
     Returns:
         - If day_offset is None or 0-4: tuple (date_str, time_start, time_end, day_name) or None for weekend
         - If day_offset is -1: list of tuples [(date_str, time_start, time_end, day_name), ...]
     """
     today = datetime.now(MYT)
-    future_date = today + timedelta(weeks=8)
+    future_date = today + timedelta(weeks=weeks_ahead)
     target_monday = future_date - timedelta(days=future_date.weekday())
     
     def _get_day_target(offset):
@@ -765,7 +766,7 @@ class KBSBooker:
                                     )
                                 return {"success": True, "court_name": retry_name}  # EXIT after successful backup booking
                             else:
-                                self.log(f"Retry booking with facility index {retry_index} also failed.")
+                                self.log(f"Secondary booking with facility index {retry_index} also failed.")
                                 # self.send_telegram(f"❌ Booking failed - primary and retry facilities failed.")
                                 # Don't exit here, maybe primary becomes available? Or just fail?
                                 # If fast book, we might loop. If standard, we loop.
@@ -834,6 +835,7 @@ Example:
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
     parser.add_argument("--book-week", action="store_true", help="Book all 5 weekday slots (Mon-Fri) for the week 8 weeks ahead. Used when running on Monday.")
     parser.add_argument("--day-offset", type=int, default=None, help="Book specific day only (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri). For parallel booking.")
+    parser.add_argument("--weeks-ahead", type=int, default=8, help="Number of weeks ahead to book (default: 8)")
     parser.add_argument("--summary-report", action="store_true", help="Generate summary report from JSON result files (parallel booking only)")
     
     args = parser.parse_args()
@@ -854,7 +856,7 @@ Example:
 
     # SINGLE DAY MODE (for parallel booking): Book specific day only
     if args.day_offset is not None:
-        date, time_start, time_end, day_name = get_booking_target(args.day_offset)
+        date, time_start, time_end, day_name = get_booking_target(args.day_offset, weeks_ahead=args.weeks_ahead)
         print("=" * 50)
         print(f"SINGLE DAY MODE: Booking {day_name}")
         print(f"Date: {date} | Time: {time_start}-{time_end}")
@@ -1002,7 +1004,7 @@ Example:
         print("BOOK WEEK MODE: Booking Mon-Fri slots")
         print("=" * 50)
         
-        weekly_targets = get_booking_target(-1)  # Get all 5 days
+        weekly_targets = get_booking_target(-1, weeks_ahead=args.weeks_ahead)  # Get all 5 days
         print(f"Targets: {len(weekly_targets)} days")
         for i, (date, ts, te, day_name) in enumerate(weekly_targets):
             print(f"  [{i}] {day_name}: {date} {ts}-{te}")
@@ -1085,7 +1087,7 @@ Example:
 
     # Use automatic date/time calculation if not provided
     if not args.date or not args.time_start or not args.time_end:
-        target = get_booking_target()  # Auto-detect from today's weekday
+        target = get_booking_target(weeks_ahead=args.weeks_ahead)  # Auto-detect from today's weekday
         if target is None:
             print("ERROR: Target date is a weekend. No booking scheduled.")
             return 1
