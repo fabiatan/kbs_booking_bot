@@ -20,6 +20,11 @@ on:
         required: false
         default: ''
         type: string
+      weeks_ahead:
+        description: 'Number of weeks ahead to book (default: 8)'
+        required: false
+        default: '8'
+        type: string
 
 jobs:
   book:
@@ -48,6 +53,7 @@ jobs:
             -u "${{ secrets.KBS_USERNAME }}" \
             -p "${{ secrets.KBS_PASSWORD }}" \
             --day-offset ${{ matrix.day_offset }} \
+            --weeks-ahead ${{ inputs.weeks_ahead || 8 }} \
             ${{ inputs.date != '' && format('-d "{0}"', inputs.date) || '' }} \
             ${{ inputs.poll_timeout && format('--poll-timeout {0}', inputs.poll_timeout) || '' }}
       
