@@ -2,7 +2,7 @@ name: KBS Booking Bot
 
 on:
   schedule:
-    - cron: '50 23 * * 0-4'  # 07:50 AM MYT on Monday-friday only
+    - cron: '50 15 * * 2-6'  # 11:50 PM MYT on Tuesday-Saturday
   workflow_dispatch:
     inputs:
       poll_timeout:
@@ -23,7 +23,7 @@ on:
       weeks_ahead:
         description: 'Number of weeks ahead to book (default: 8)'
         required: false
-        default: '8'
+        default: '9'
         type: string
 
 jobs:
@@ -53,7 +53,7 @@ jobs:
             -u "${{ secrets.KBS_USERNAME }}" \
             -p "${{ secrets.KBS_PASSWORD }}" \
             --day-offset ${{ matrix.day_offset }} \
-            --weeks-ahead ${{ inputs.weeks_ahead || 8 }} \
+            --weeks-ahead ${{ inputs.weeks_ahead || 9 }} \
             ${{ inputs.date != '' && format('-d "{0}"', inputs.date) || '' }} \
             ${{ inputs.poll_timeout && format('--poll-timeout {0}', inputs.poll_timeout) || '' }}
       
