@@ -1,6 +1,6 @@
 # KBS Booking Bot
 
-Automated booking bot for KBS (Kementerian Belia dan Sukan) sports facilities.
+Automated booking bot for KBS sports facilities.
 
 ## Setup
 
@@ -31,19 +31,6 @@ Go to **Settings** → **Secrets and variables** → **Actions** and add:
    - Start time: `HH:MM:SS` (default: `07:00:00`)
    - End time: `HH:MM:SS` (default: `08:00:00`)
 
-### Local Run
-
-```bash
-pip install requests
-
-python kbs_booker_1.py \
-  -u "YOUR_IC" \
-  -p "YOUR_PASSWORD" \
-  -d "07/01/2026" \
-  -ts "07:00:00" \
-  -te "08:00:00"
-```
-
 ### Options
 
 | Argument | Description | Default |
@@ -59,6 +46,7 @@ python kbs_booker_1.py \
 ## Notifications
 
 Bot sends Telegram notifications for:
+
 - Slot available
 - Booking success
 - Booking failed
