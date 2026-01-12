@@ -21,7 +21,7 @@ on:
         default: ''
         type: string
       weeks_ahead:
-        description: 'Number of weeks ahead to book (default: 8)'
+        description: 'Number of weeks ahead to book (default: 9)'
         required: false
         default: '9'
         type: string
@@ -45,6 +45,8 @@ jobs:
         run: sleep $((${{ matrix.day_offset }} * 10))
       
       - name: Run booking bot (Day ${{ matrix.day_offset }})
+        # Skip matrix jobs when specific date is provided (only run day_offset=0)
+        if: ${{ inputs.date == '' || matrix.day_offset == 0 }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -52,7 +54,7 @@ jobs:
           python kbs_booker_bot.py \
             -u "${{ secrets.KBS_USERNAME }}" \
             -p "${{ secrets.KBS_PASSWORD }}" \
-            --day-offset ${{ matrix.day_offset }} \
+            ${{ inputs.date == '' && format('--day-offset {0}', matrix.day_offset) || '' }} \
             ${{ inputs.weeks_ahead && format('--weeks-ahead {0}', inputs.weeks_ahead) || '' }} \
             ${{ inputs.date != '' && format('-d "{0}"', inputs.date) || '' }} \
             ${{ inputs.poll_timeout && format('--poll-timeout {0}', inputs.poll_timeout) || '' }}
