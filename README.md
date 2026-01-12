@@ -40,7 +40,7 @@ Go to **Settings** → **Secrets and variables** → **Actions** and add:
 | `-d, --date` | Booking date (DD/MM/YYYY) | Required |
 | `-ts, --time-start` | Start time | `07:00:00` |
 | `-te, --time-end` | End time | `08:00:00` |
-| `--poll-timeout` | Max polling seconds | `3600` |
+| `--poll-timeout` | Max polling seconds | `1800` |
 | `--debug` | Enable debug output | `false` |
 
 ## Notifications

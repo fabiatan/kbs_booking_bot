@@ -513,7 +513,7 @@ class KBSBooker:
             "url": resp.url
         }
     
-    def run(self, config: dict, poll_timeout: int = 3600, check_interval: float = 1.0) -> dict:
+    def run(self, config: dict, poll_timeout: int, check_interval: float = 1.0) -> dict:
         """
         Main booking flow - polls for availability and books when slot opens
 
@@ -803,8 +803,8 @@ def main():
         epilog="""
 Example:
   python kbs_booker.py \\
-    -u "910101011234" \\
-    -p "yourpassword" \\
+    -u "YOUR_IC_NUMBER" \\
+    -p "YOUR_PASSWORD" \\
     -d "07/01/2026" \\
     -ts "07:00:00" \\
     -te "08:00:00" \\
@@ -830,12 +830,12 @@ Example:
     parser.add_argument("--list-facilities", action="store_true", help="List available facilities and exit")
     parser.add_argument("--num-users", default="4", help="Number of users (default: 4)")
     parser.add_argument("--purpose", default="4", help="Purpose code (default: 4)")
-    parser.add_argument("--poll-timeout", type=int, default=3600, help="Max seconds to poll (default: 3600 = 1 hour)")
+    parser.add_argument("--poll-timeout", type=int, default=1800, help="Max seconds to poll (default: 1800 = 30 minutes)")
     parser.add_argument("--check-interval", type=float, default=1.0, help="Seconds between availability checks (default: 1)")
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
     parser.add_argument("--book-week", action="store_true", help="Book all 5 weekday slots (Mon-Fri) for the week 8 weeks ahead. Used when running on Monday.")
     parser.add_argument("--day-offset", type=int, default=None, help="Book specific day only (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri). For parallel booking.")
-    parser.add_argument("--weeks-ahead", type=int, default=8, help="Number of weeks ahead to book (default: 8)")
+    parser.add_argument("--weeks-ahead", type=int, default=9, help="Number of weeks ahead to book (default: 9)")
     parser.add_argument("--summary-report", action="store_true", help="Generate summary report from JSON result files (parallel booking only)")
     
     args = parser.parse_args()

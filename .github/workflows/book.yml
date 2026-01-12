@@ -2,13 +2,13 @@ name: KBS Booking Bot
 
 on:
   schedule:
-    - cron: '50 23 * * *'  # 11:58 PM MYT everyday
+    - cron: '58 15 * * *'  # 11:58 PM MYT everyday
   workflow_dispatch:
     inputs:
       poll_timeout:
         description: 'Poll timeout in seconds'
         required: false
-        default: '3600'
+        default: '1800'
         type: string
       parallel:
         description: 'Use parallel booking (5 jobs)'
@@ -23,7 +23,7 @@ on:
       weeks_ahead:
         description: 'Number of weeks ahead to book (default: 8)'
         required: false
-        default: '8'
+        default: '9'
         type: string
 
 jobs:
@@ -53,7 +53,7 @@ jobs:
             -u "${{ secrets.KBS_USERNAME }}" \
             -p "${{ secrets.KBS_PASSWORD }}" \
             --day-offset ${{ matrix.day_offset }} \
-            --weeks-ahead ${{ inputs.weeks_ahead || 8 }} \
+            ${{ inputs.weeks_ahead && format('--weeks-ahead {0}', inputs.weeks_ahead) || '' }} \
             ${{ inputs.date != '' && format('-d "{0}"', inputs.date) || '' }} \
             ${{ inputs.poll_timeout && format('--poll-timeout {0}', inputs.poll_timeout) || '' }}
       
