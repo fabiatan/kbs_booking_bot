@@ -57,7 +57,8 @@ jobs:
             ${{ inputs.date == '' && format('--day-offset {0}', matrix.day_offset) || '' }} \
             ${{ inputs.weeks_ahead && format('--weeks-ahead {0}', inputs.weeks_ahead) || '' }} \
             ${{ inputs.date != '' && format('-d "{0}"', inputs.date) || '' }} \
-            ${{ inputs.poll_timeout && format('--poll-timeout {0}', inputs.poll_timeout) || '' }}
+            ${{ inputs.poll_timeout && format('--poll-timeout {0}', inputs.poll_timeout) || '' }} \
+            --debug
       
       - name: Upload result
         if: always() # Upload even if booking fails
