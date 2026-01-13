@@ -38,46 +38,68 @@ DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 # Malaysia timezone (UTC+8) - ensures correct date calculation on GitHub Actions
 MYT = timezone(timedelta(hours=8))
 
-def get_booking_target(day_offset=None, weeks_ahead=8):
+def get_booking_target(day_offset=None, days_ahead=61):
     """
-    Calculate booking target(s) for N weeks from now.
+    Calculate booking target for a specific day N days from now.
+    Pattern: Slots are released at 12:00am daily for 8 weeks + 5 days ahead (61 days).
     
     Args:
         day_offset: 
-            - None: Auto-detect based on today's weekday (returns None for weekend)
-            - 0-4: Specific day (0=Monday to 4=Friday)
-            - -1: Return all 5 weekdays as a list
-        weeks_ahead: Number of weeks to look ahead (default: 8)
+            - None: Auto-target the next weekday that's days_ahead from now
+            - 0-4: Specific day offset (0=Monday to 4=Friday) - calculates which future date
+                   at days_ahead matches this weekday
+            - -1: Return all 5 weekdays as a list (legacy mode, not recommended for daily runs)
+        days_ahead: Number of days to look ahead (default: 61 = 8 weeks + 5 days)
     
     Returns:
         - If day_offset is None or 0-4: tuple (date_str, time_start, time_end, day_name) or None for weekend
         - If day_offset is -1: list of tuples [(date_str, time_start, time_end, day_name), ...]
     """
     today = datetime.now(MYT)
-    future_date = today + timedelta(weeks=weeks_ahead)
-    target_monday = future_date - timedelta(days=future_date.weekday())
     
-    def _get_day_target(offset):
-        target_date = target_monday + timedelta(days=offset)
-        time_start, time_end = TIME_SLOTS[offset]
-        date_str = target_date.strftime("%d/%m/%Y")
-        return (date_str, time_start, time_end, DAY_NAMES[offset])
+    # Calculate the target date that will be released (days_ahead from now)
+    future_date = today + timedelta(days=days_ahead)
     
-    # Return all weekdays
-    if day_offset == -1:
-        return [_get_day_target(i) for i in range(5)]
-    
-    # Auto-detect from today's weekday
-    if day_offset is None:
-        day_of_week = future_date.weekday()
+    def _get_day_target(target_date_obj):
+        """Helper to build target tuple from a date object"""
+        day_of_week = target_date_obj.weekday()
         if day_of_week not in TIME_SLOTS:
             return None  # Weekend - no booking
-        return _get_day_target(day_of_week)
+        time_start, time_end = TIME_SLOTS[day_of_week]
+        date_str = target_date_obj.strftime("%d/%m/%Y")
+        return (date_str, time_start, time_end, DAY_NAMES[day_of_week])
     
-    # Specific day offset
+    # Return all weekdays (legacy mode - not commonly used for daily runs)
+    if day_offset == -1:
+        target_monday = future_date - timedelta(days=future_date.weekday())
+        results = []
+        for i in range(5):
+            target_date = target_monday + timedelta(days=i)
+            results.append((target_date.strftime("%d/%m/%Y"), TIME_SLOTS[i][0], TIME_SLOTS[i][1], DAY_NAMES[i]))
+        return results
+    
+    # Auto-detect from future_date's weekday (default daily mode)
+    if day_offset is None:
+        # If future_date falls on weekend, skip to next Monday
+        day_of_week = future_date.weekday()
+        if day_of_week >= 5:  # Saturday (5) or Sunday (6)
+            # Skip to next Monday
+            days_to_add = 7 - day_of_week  # Days until next Monday
+            future_date = future_date + timedelta(days=days_to_add)
+        return _get_day_target(future_date)
+    
+    # Specific day offset (0-4 for Mon-Fri)
     if day_offset < 0 or day_offset > 4:
         raise ValueError(f"day_offset must be -1, None, or 0-4, got {day_offset}")
-    return _get_day_target(day_offset)
+    
+    # When day_offset is specified, we still use the future_date calculated from days_ahead
+    # but we need to adjust which specific day we target in that week
+    # This maintains compatibility with parallel booking while using days_ahead
+    current_day_of_week = future_date.weekday()
+    days_to_target = day_offset - current_day_of_week
+    adjusted_future_date = future_date + timedelta(days=days_to_target)
+    
+    return _get_day_target(adjusted_future_date)
 
 
 def build_config(args, date: str, time_start: str, time_end: str) -> dict:
@@ -628,7 +650,15 @@ class KBSBooker:
             # Check timeout
             if elapsed > poll_timeout:
                 self.log(f"Timeout after {poll_timeout}s ({check_count} checks)")
-                # Skip Telegram notification for timeout - waste of time
+                # Send timeout notification
+                booking_date = datetime.strptime(config["date"], "%d/%m/%Y")
+                day_name = booking_date.strftime("%A")
+                self.send_telegram(
+                    f"❌ <b>BOOKING TIMEOUT</b>\n"
+                    f"Date: {config['date']} ({day_name})\n"
+                    f"Time: {config['time_start']}-{config['time_end']}\n"
+                    f"Slot did not become available after {int(poll_timeout/60)} minutes"
+                )
                 return {"success": False, "court_name": None}
 
             # Check availability
@@ -680,6 +710,15 @@ class KBSBooker:
                         )
                         if confirm_result["success"]:
                             self.log(f"CONFIRMED! {confirm_result['url']}")
+                            # Send success notification
+                            self.send_telegram(
+                                f"✅ <b>BOOKING SUCCESS!</b>\n"
+                                f"Location: Kompleks Sukan KBS\n"
+                                f"Court: {facility_name}\n"
+                                f"Date: {config['date']} ({day_name})\n"
+                                f"Time: {config['time_start']}-{config['time_end']} ({hours}h)\n"
+                                f"Price: RM {total_price_calc}"
+                            )
                         else:
                             self.log("WARNING: Confirmation may have failed")
                             self.send_telegram(f"⚠️ Booking created but confirmation may have failed")
@@ -767,8 +806,8 @@ class KBSBooker:
                                 return {"success": True, "court_name": retry_name}  # EXIT after successful backup booking
                             else:
                                 self.log(f"Secondary booking with facility index {retry_index} also failed.")
-                                # self.send_telegram(f"❌ Booking failed - primary and retry facilities failed.")
-                                # Don't exit here, maybe primary becomes available? Or just fail?
+                                # Don't send Telegram here - would cause recurring messages
+                                # Failure notification sent only once on timeout (line 656-661)
                                 # If fast book, we might loop. If standard, we loop.
                                 
                                 # Revert ID to primary for next loop iteration check
@@ -835,7 +874,8 @@ Example:
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
     parser.add_argument("--book-week", action="store_true", help="Book all 5 weekday slots (Mon-Fri) for the week 8 weeks ahead. Used when running on Monday.")
     parser.add_argument("--day-offset", type=int, default=None, help="Book specific day only (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri). For parallel booking.")
-    parser.add_argument("--weeks-ahead", type=int, default=9, help="Number of weeks ahead to book (default: 9)")
+    parser.add_argument("--weeks-ahead", type=int, default=None, help="DEPRECATED: Use --days-ahead instead. Number of weeks ahead to book.")
+    parser.add_argument("--days-ahead", type=int, default=61, help="Number of days ahead to book (default: 61 = 8 weeks + 5 days)")
     parser.add_argument("--summary-report", action="store_true", help="Generate summary report from JSON result files (parallel booking only)")
     
     args = parser.parse_args()
@@ -856,7 +896,13 @@ Example:
 
     # SINGLE DAY MODE (for parallel booking): Book specific day only
     if args.day_offset is not None:
-        date, time_start, time_end, day_name = get_booking_target(args.day_offset, weeks_ahead=args.weeks_ahead)
+        # Support legacy weeks_ahead parameter for backward compatibility
+        days_ahead = args.days_ahead
+        if args.weeks_ahead is not None:
+            booker.log(f"WARNING: --weeks-ahead is deprecated. Converting {args.weeks_ahead} weeks to {args.weeks_ahead * 7} days.")
+            days_ahead = args.weeks_ahead * 7
+        
+        date, time_start, time_end, day_name = get_booking_target(args.day_offset, days_ahead=days_ahead)
         print("=" * 50)
         print(f"SINGLE DAY MODE: Booking {day_name}")
         print(f"Date: {date} | Time: {time_start}-{time_end}")
@@ -898,7 +944,7 @@ Example:
     # SUMMARY REPORT MODE: Aggregate results and send Telegram summary
     if args.summary_report:
         print("=" * 50)
-        print("GENERATING WEEKLY SUMMARY REPORT")
+        print("GENERATING BOOKING SUMMARY REPORT")
         print("=" * 50)
         
         # Find all result files
@@ -918,7 +964,7 @@ Example:
         total_count = 5  # We expect 5 days
         
         summary_lines = [
-            f"📅 <b>WEEKLY BOOKING SUMMARY</b>",
+            f"📅 <b>BOOKING SUMMARY</b>",
             f"Location: Kompleks Sukan KBS",
             f"Total: {success_count}/{total_count} booked",
             ""
@@ -1004,7 +1050,13 @@ Example:
         print("BOOK WEEK MODE: Booking Mon-Fri slots")
         print("=" * 50)
         
-        weekly_targets = get_booking_target(-1, weeks_ahead=args.weeks_ahead)  # Get all 5 days
+        # Support legacy weeks_ahead parameter for backward compatibility
+        days_ahead = args.days_ahead
+        if args.weeks_ahead is not None:
+            booker.log(f"WARNING: --weeks-ahead is deprecated. Converting {args.weeks_ahead} weeks to {args.weeks_ahead * 7} days.")
+            days_ahead = args.weeks_ahead * 7
+        
+        weekly_targets = get_booking_target(-1, days_ahead=days_ahead)  # Get all 5 days
         print(f"Targets: {len(weekly_targets)} days")
         for i, (date, ts, te, day_name) in enumerate(weekly_targets):
             print(f"  [{i}] {day_name}: {date} {ts}-{te}")
@@ -1044,7 +1096,7 @@ Example:
                 print(f"➡️  Continuing to next day... ({remaining} remaining)")
         
         print("\n" + "=" * 50)
-        print("WEEKLY BOOKING SUMMARY")
+        print("BOOKING SUMMARY")
         print("=" * 50)
         success_count = sum(1 for r in results if r[4])
         fail_count = len(results) - success_count
@@ -1056,7 +1108,7 @@ Example:
         
         # Send Telegram summary in detailed format
         summary_lines = [
-            f"📅 <b>WEEKLY BOOKING SUMMARY</b>",
+            f"📅 <b>BOOKING SUMMARY</b>",
             f"Location: Kompleks Sukan KBS",
             f"Total: {success_count}/5 booked",
             ""
@@ -1087,7 +1139,13 @@ Example:
 
     # Use automatic date/time calculation if not provided
     if not args.date or not args.time_start or not args.time_end:
-        target = get_booking_target(weeks_ahead=args.weeks_ahead)  # Auto-detect from today's weekday
+        # Support legacy weeks_ahead parameter for backward compatibility
+        days_ahead = args.days_ahead
+        if args.weeks_ahead is not None:
+            booker.log(f"WARNING: --weeks-ahead is deprecated. Converting {args.weeks_ahead} weeks to {args.weeks_ahead * 7} days.")
+            days_ahead = args.weeks_ahead * 7
+        
+        target = get_booking_target(days_ahead=days_ahead)  # Auto-detect from today's weekday
         if target is None:
             print("ERROR: Target date is a weekend. No booking scheduled.")
             return 1

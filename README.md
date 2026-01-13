@@ -18,40 +18,56 @@ Go to **Settings** → **Secrets and variables** → **Actions** and add:
 |--------|-------------|
 | `KBS_USERNAME` | Your IC number |
 | `KBS_PASSWORD` | Your password |
+| `TELEGRAM_BOT_TOKEN` | (Optional) Telegram bot token for notifications |
+| `TELEGRAM_CHAT_ID` | (Optional) Telegram chat ID for notifications |
 
-## Usage
+## How It Works
 
-### Manual Run (GitHub Actions)
+The bot automatically books **weekday slots only** (Mon-Fri) based on the KBS booking release pattern:
+
+- **Release Pattern**: Slots open at 12:00am daily
+- **Booking Window**: 61 days ahead (8 weeks + 5 days)
+- **Schedule**: Runs Wed-Sun at 11:58 PM MYT
+- **Target**: Books one weekday slot per run
+
+## Manual Run (GitHub Actions)
 
 1. Go to **Actions** tab
 2. Select **KBS Booking Bot**
 3. Click **Run workflow**
-4. Enter:
-   - Date: `DD/MM/YYYY` (e.g., `07/01/2026`)
-   - Start time: `HH:MM:SS` (default: `07:00:00`)
-   - End time: `HH:MM:SS` (default: `08:00:00`)
+4. Configure (optional):
+   - **date**: Specific date to book (DD/MM/YYYY), leave empty for auto
+   - **days_ahead**: Number of days ahead (default: 61)
+   - **poll_timeout**: Max seconds to poll (default: 1800)
 
-### Options
+## Command-Line Options
 
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `-u, --username` | IC number | Required |
 | `-p, --password` | Password | Required |
-| `-d, --date` | Booking date (DD/MM/YYYY) | Required |
-| `-ts, --time-start` | Start time | `07:00:00` |
-| `-te, --time-end` | End time | `08:00:00` |
+| `-d, --date` | Booking date (DD/MM/YYYY) | Auto-calculated (61 days ahead) |
+| `-ts, --time-start` | Start time | Day-specific (19:00-20:00 Mon-Thu, 20:00-22:00 Fri) |
+| `-te, --time-end` | End time | Day-specific |
+| `--days-ahead` | Days ahead to book | `61` |
 | `--poll-timeout` | Max polling seconds | `1800` |
 | `--debug` | Enable debug output | `false` |
+
+## Automated Schedule
+
+The workflow runs **Wed-Sun at 11:58 PM MYT** to book weekday slots only:
+
+- Wed + 61 days = Mon ✓
+- Thu + 61 days = Tue ✓
+- Fri + 61 days = Wed ✓
+- Sat + 61 days = Thu ✓
+- Sun + 61 days = Fri ✓
+
+Runs are skipped on Mon-Tue to avoid targeting weekend slots.
 
 ## Notifications
 
 Bot sends Telegram notifications for:
 
-- Slot available
-- Booking success
+- Booking success (with court details)
 - Booking failed
-- Polling timeout
-
-## Schedule
-
-The workflow runs daily at **8:25 AM MYT** (configured in `.github/workflows/book.yml`).
