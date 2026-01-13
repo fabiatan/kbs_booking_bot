@@ -806,16 +806,8 @@ class KBSBooker:
                                 return {"success": True, "court_name": retry_name}  # EXIT after successful backup booking
                             else:
                                 self.log(f"Secondary booking with facility index {retry_index} also failed.")
-                                # Send failure notification after both attempts failed
-                                booking_date = datetime.strptime(config["date"], "%d/%m/%Y")
-                                day_name = booking_date.strftime("%A")
-                                self.send_telegram(
-                                    f"❌ <b>BOOKING FAILED</b>\n"
-                                    f"Date: {config['date']} ({day_name})\n"
-                                    f"Time: {config['time_start']}-{config['time_end']}\n"
-                                    f"Both courts unavailable or taken by others."
-                                )
-                                # Don't exit here, maybe primary becomes available? Or just fail?
+                                # Don't send Telegram here - would cause recurring messages
+                                # Failure notification sent only once on timeout (line 656-661)
                                 # If fast book, we might loop. If standard, we loop.
                                 
                                 # Revert ID to primary for next loop iteration check
