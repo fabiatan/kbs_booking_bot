@@ -289,7 +289,7 @@ class KBSBooker:
         
         return facilities
     
-    def get_calendar_page(self, venue_id: str, facility_id: str, neg: str = "07") -> str:
+    def get_calendar_page(self, venue_id: str, facility_id: str, neg: str = "07", max_retries: int = 5, retry_delay: float = 3.0) -> str:
         """
         Navigate to calendar page to extract ks_token
         
@@ -302,65 +302,81 @@ class KBSBooker:
             venue_id: Encoded venue ID (e.g., 'GxqArR56DGE8ZKkBI2f9')
             facility_id: Encoded facility ID (e.g., 'GxqArR56DGE8AQp3sR5Knm0=')
             neg: State code (e.g., '07')
+            max_retries: Maximum retry attempts if token extraction fails
+            retry_delay: Seconds to wait between retries
         """
-        # Step 1: Visit tempahan home
-        self.log("Navigating to tempahan home...")
-        resp = self.session.get(f"{self.BASE_URL}/t_tempahan/tempahan_home.php")
-        if self.debug:
-            self.log(f"tempahan_home.php status: {resp.status_code}")
-        
-        # Step 2: Visit facility list page (sets referrer context)
-        self.log("Navigating to facility list...")
-        list_url = f"{self.BASE_URL}/t_tempahan/tempahan_listfasiliti.php"
-        list_params = {"id": venue_id, "neg": neg}
-        resp = self.session.get(list_url, params=list_params)
-        if self.debug:
-            self.log(f"tempahan_listfasiliti.php status: {resp.status_code}")
-        
-        # Step 3: Get calendar page with proper referrer
-        self.log("Fetching calendar page...")
-        cal_url = f"{self.BASE_URL}/t_tempahan/tempahan_addcal.php"
-        cal_params = {
-            "id": venue_id,
-            "idf": facility_id,
-            "neg": neg
-        }
-        
-        # Set referrer header
-        headers = {
-            "Referer": f"{self.BASE_URL}/t_tempahan/tempahan_listfasiliti.php?id={venue_id}&neg={neg}"
-        }
-        
-        resp = self.session.get(cal_url, params=cal_params, headers=headers)
-        
-        if self.debug:
-            self.log(f"tempahan_addcal.php status: {resp.status_code}")
-            self.log(f"Response length: {len(resp.text)}")
-        
-        # Extract ks_token from hidden input - try multiple patterns
-        patterns = [
-            r'name=["\']ks_token["\'][^>]*value=["\']([a-f0-9]+)["\']',
-            r'value=["\']([a-f0-9]+)["\'][^>]*name=["\']ks_token["\']',
-            r'id=["\']ks_token["\'][^>]*value=["\']([a-f0-9]+)["\']',
-            r'ks_token["\s:]+["\']([a-f0-9]{32})["\']',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, resp.text, re.IGNORECASE)
-            if match:
-                self.ks_token = match.group(1)
-                self.log(f"Got ks_token: {self.ks_token}")
-                break
-        
-        if not self.ks_token:
-            self.log("WARNING: Could not extract ks_token from page")
+        for attempt in range(max_retries):
+            if attempt > 0:
+                self.log(f"Retry attempt {attempt + 1}/{max_retries} for calendar page...")
+                time.sleep(retry_delay)
+            
+            # Step 1: Visit tempahan home
+            self.log("Navigating to tempahan home...")
+            resp = self.session.get(f"{self.BASE_URL}/t_tempahan/tempahan_home.php")
+            if self.debug:
+                self.log(f"tempahan_home.php status: {resp.status_code}")
+            
+            # Step 2: Visit facility list page (sets referrer context)
+            self.log("Navigating to facility list...")
+            list_url = f"{self.BASE_URL}/t_tempahan/tempahan_listfasiliti.php"
+            list_params = {"id": venue_id, "neg": neg}
+            resp = self.session.get(list_url, params=list_params)
+            if self.debug:
+                self.log(f"tempahan_listfasiliti.php status: {resp.status_code}")
+            
+            # Step 3: Get calendar page with proper referrer
+            self.log("Fetching calendar page...")
+            cal_url = f"{self.BASE_URL}/t_tempahan/tempahan_addcal.php"
+            cal_params = {
+                "id": venue_id,
+                "idf": facility_id,
+                "neg": neg
+            }
+            
+            # Set referrer header
+            headers = {
+                "Referer": f"{self.BASE_URL}/t_tempahan/tempahan_listfasiliti.php?id={venue_id}&neg={neg}"
+            }
+            
+            resp = self.session.get(cal_url, params=cal_params, headers=headers)
+            
+            if self.debug:
+                self.log(f"tempahan_addcal.php status: {resp.status_code}")
+                self.log(f"Response length: {len(resp.text)}")
+            
+            # Check for server error in response
+            if "Fatal error" in resp.text or "memory" in resp.text.lower():
+                self.log(f"Server error detected (attempt {attempt + 1}/{max_retries})")
+                if self.debug:
+                    self.log(f"Error response: {resp.text[:500]}")
+                continue  # Retry
+            
+            # Extract ks_token from hidden input - try multiple patterns
+            patterns = [
+                r'name=["\'"]ks_token["\'"][^>]*value=["\'"]([a-f0-9]+)["\'"]',
+                r'value=["\'"]([a-f0-9]+)["\'"][^>]*name=["\'"]ks_token["\'"]',
+                r'id=["\'"]ks_token["\'"][^>]*value=["\'"]([a-f0-9]+)["\'"]',
+                r'ks_token["\s:]+["\'"]([a-f0-9]{32})["\'"]',
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, resp.text, re.IGNORECASE)
+                if match:
+                    self.ks_token = match.group(1)
+                    self.log(f"Got ks_token: {self.ks_token}")
+                    return resp.text  # Success - exit retry loop
+            
+            # Token not found
+            self.log(f"WARNING: Could not extract ks_token (attempt {attempt + 1}/{max_retries})")
             if self.debug:
                 # Look for any token-like hidden fields
-                tokens = re.findall(r'<input[^>]*name=["\']ks_[^"\']+["\'][^>]*>', resp.text)
+                tokens = re.findall(r'<input[^>]*name=["\'"]ks_[^"\']+["\'"][^>]*>', resp.text)
                 self.log(f"KS inputs found: {tokens}")
                 # Also dump some of the page for debugging
                 self.log(f"Page sample: {resp.text[:1000]}")
         
+        # All retries exhausted
+        self.log(f"ERROR: Failed to get ks_token after {max_retries} attempts")
         return resp.text
     
     def check_slot(self, facility_id: int, tjk_id: int, date: str, 
