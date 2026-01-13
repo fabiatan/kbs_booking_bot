@@ -2,38 +2,29 @@ name: KBS Booking Bot
 
 on:
   schedule:
-    - cron: '58 15 * * *'  # 11:58 PM MYT everyday
+    - cron: '58 15 * * 0,2-6'  # 11:58 PM MYT on tue-Sun (books Mon-Fri 61 days ahead)
   workflow_dispatch:
     inputs:
       poll_timeout:
         description: 'Poll timeout in seconds'
         required: false
-        default: '1800'
+        default: '900'
         type: string
-      parallel:
-        description: 'Use parallel booking (5 jobs)'
-        required: false
-        default: true
-        type: boolean
       date:
         description: 'Specific date to book (DD/MM/YYYY), leave empty for auto'
         required: false
         default: ''
         type: string
-      weeks_ahead:
-        description: 'Number of weeks ahead to book (default: 9)'
+      days_ahead:
+        description: 'Number of days ahead to book (default: 61 = 8 weeks + 5 days)'
         required: false
-        default: '9'
+        default: '61'
         type: string
 
 jobs:
   book:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    strategy:
-      fail-fast: false  # Continue other jobs even if one fails
-      matrix:
-        day_offset: [0, 1, 2, 3, 4]  # Mon=0, Tue=1, Wed=2, Thu=3, Fri=4
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -41,12 +32,7 @@ jobs:
           python-version: '3.11'
       - run: pip install requests
       
-      - name: Stagger job start to prevent cart accumulation
-        run: sleep $((${{ matrix.day_offset }} * 10))
-      
-      - name: Run booking bot (Day ${{ matrix.day_offset }})
-        # Skip matrix jobs when specific date is provided (only run day_offset=0)
-        if: ${{ inputs.date == '' || matrix.day_offset == 0 }}
+      - name: Run booking bot (Daily)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -54,42 +40,6 @@ jobs:
           python kbs_booker_bot.py \
             -u "${{ secrets.KBS_USERNAME }}" \
             -p "${{ secrets.KBS_PASSWORD }}" \
-            ${{ inputs.date == '' && format('--day-offset {0}', matrix.day_offset) || '' }} \
-            ${{ inputs.weeks_ahead && format('--weeks-ahead {0}', inputs.weeks_ahead) || '' }} \
+            ${{ inputs.days_ahead && format('--days-ahead {0}', inputs.days_ahead) || '' }} \
             ${{ inputs.date != '' && format('-d "{0}"', inputs.date) || '' }} \
             ${{ inputs.poll_timeout && format('--poll-timeout {0}', inputs.poll_timeout) || '' }}
-      
-      - name: Upload result
-        if: always() # Upload even if booking fails
-        uses: actions/upload-artifact@v4
-        with:
-          name: booking-result-${{ matrix.day_offset }}
-          path: booking_result_*.json
-          retention-days: 1
-
-  summary:
-    needs: book
-    runs-on: ubuntu-latest
-    if: always() # Run even if some booking jobs failed
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install requests
-      
-      - name: Download all results
-        uses: actions/download-artifact@v4
-        with:
-          pattern: booking-result-*
-          merge-multiple: true
-      
-      - name: Send Weekly Summary
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          # Use dummy credentials as we only need send_telegram functionality
-          python kbs_booker_bot.py \
-            -u "dummy" -p "dummy" \
-            --summary-report
