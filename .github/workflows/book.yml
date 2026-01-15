@@ -51,9 +51,18 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
+          # Select credentials based on day (Wednesday uses alternate account)
+          if [ "${{ matrix.day_offset }}" = "2" ]; then
+            USERNAME="${{ secrets.KBS_USERNAME_PERSONAL }}"
+            PASSWORD="${{ secrets.KBS_PASSWORD_PERSONAL }}"
+          else
+            USERNAME="${{ secrets.KBS_USERNAME }}"
+            PASSWORD="${{ secrets.KBS_PASSWORD }}"
+          fi
+          
           python kbs_booker_bot.py \
-            -u "${{ secrets.KBS_USERNAME }}" \
-            -p "${{ secrets.KBS_PASSWORD }}" \
+            -u "$USERNAME" \
+            -p "$PASSWORD" \
             ${{ inputs.date == '' && format('--day-offset {0}', matrix.day_offset) || '' }} \
             ${{ inputs.weeks_ahead && format('--weeks-ahead {0}', inputs.weeks_ahead) || '' }} \
             ${{ inputs.date != '' && format('-d "{0}"', inputs.date) || '' }} \
