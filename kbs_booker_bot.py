@@ -138,6 +138,7 @@ def calculate_booking_price(time_start: str, time_end: str) -> tuple:
 
 class KBSBooker:
     BASE_URL = "https://stf.kbs.gov.my"
+    DEFAULT_TIMEOUT = 60  # seconds - prevents hanging on unresponsive server
 
     # Telegram notification config (from environment variables)
     TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -184,7 +185,7 @@ class KBSBooker:
         
         # Step 1: Get login page to extract tokens
         self.log("Fetching login page...")
-        resp = self.session.get(login_page_url)
+        resp = self.session.get(login_page_url, timeout=self.DEFAULT_TIMEOUT)
         
         if self.debug:
             self.log(f"Login page status: {resp.status_code}")
@@ -223,7 +224,7 @@ class KBSBooker:
         }
         
         self.log("Submitting login...")
-        resp = self.session.post(login_handler_url, data=login_data, allow_redirects=True)
+        resp = self.session.post(login_handler_url, data=login_data, allow_redirects=True, timeout=self.DEFAULT_TIMEOUT)
         
         # Check if logged in - successful login redirects to home.php
         logged_in = (
@@ -253,12 +254,12 @@ class KBSBooker:
             neg: State code
         """
         # First visit tempahan home
-        self.session.get(f"{self.BASE_URL}/t_tempahan/tempahan_home.php")
+        self.session.get(f"{self.BASE_URL}/t_tempahan/tempahan_home.php", timeout=self.DEFAULT_TIMEOUT)
         
         # Get facility list page
         list_url = f"{self.BASE_URL}/t_tempahan/tempahan_listfasiliti.php"
         params = {"id": venue_id, "neg": neg}
-        resp = self.session.get(list_url, params=params)
+        resp = self.session.get(list_url, params=params, timeout=self.DEFAULT_TIMEOUT)
         
         if self.debug:
             self.log(f"Facility list page status: {resp.status_code}")
@@ -312,7 +313,7 @@ class KBSBooker:
             
             # Step 1: Visit tempahan home
             self.log("Navigating to tempahan home...")
-            resp = self.session.get(f"{self.BASE_URL}/t_tempahan/tempahan_home.php")
+            resp = self.session.get(f"{self.BASE_URL}/t_tempahan/tempahan_home.php", timeout=self.DEFAULT_TIMEOUT)
             if self.debug:
                 self.log(f"tempahan_home.php status: {resp.status_code}")
             
@@ -320,7 +321,7 @@ class KBSBooker:
             self.log("Navigating to facility list...")
             list_url = f"{self.BASE_URL}/t_tempahan/tempahan_listfasiliti.php"
             list_params = {"id": venue_id, "neg": neg}
-            resp = self.session.get(list_url, params=list_params)
+            resp = self.session.get(list_url, params=list_params, timeout=self.DEFAULT_TIMEOUT)
             if self.debug:
                 self.log(f"tempahan_listfasiliti.php status: {resp.status_code}")
             
@@ -338,7 +339,11 @@ class KBSBooker:
                 "Referer": f"{self.BASE_URL}/t_tempahan/tempahan_listfasiliti.php?id={venue_id}&neg={neg}"
             }
             
-            resp = self.session.get(cal_url, params=cal_params, headers=headers)
+            try:
+                resp = self.session.get(cal_url, params=cal_params, headers=headers, timeout=self.DEFAULT_TIMEOUT)
+            except requests.RequestException as e:
+                self.log(f"Network error on attempt {attempt + 1}: {e}")
+                continue
             
             if self.debug:
                 self.log(f"tempahan_addcal.php status: {resp.status_code}")
@@ -346,10 +351,14 @@ class KBSBooker:
             
             # Check for server error in response
             if "Fatal error" in resp.text or "memory" in resp.text.lower():
-                self.log(f"Server error detected (attempt {attempt + 1}/{max_retries})")
+                self.log(f"Server error detected (attempt {attempt + 1}/{max_retries}) - Refreshing session...")
                 if self.debug:
                     self.log(f"Error response: {resp.text[:500]}")
-                continue  # Retry
+                
+                # Refresh session to clear potentially bad state
+                self.session.cookies.clear()
+                self.login()
+                continue  # Retry with new session
             
             # Extract ks_token from hidden input - try multiple patterns
             patterns = [

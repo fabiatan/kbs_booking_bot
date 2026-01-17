@@ -2,13 +2,13 @@ name: KBS Booking Bot
 
 on:
   schedule:
-    - cron: '55 15 * * *'  # 11:55 PM MYT everyday
+    - cron: '53 15 * * *'  # 11:55 PM MYT everyday
   workflow_dispatch:
     inputs:
       poll_timeout:
         description: 'Poll timeout in seconds'
         required: false
-        default: '1800'
+        default: '2200'
         type: string
       parallel:
         description: 'Use parallel booking (5 jobs)'
