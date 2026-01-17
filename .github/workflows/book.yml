@@ -52,9 +52,9 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           # Select credentials based on day (Wednesday uses alternate account)
-          if [ "${{ matrix.day_offset }}" = "3" ]; then
-            USERNAME="${{ secrets.KBS_USERNAME_PERSONAL }}"
-            PASSWORD="${{ secrets.KBS_PASSWORD_PERSONAL }}"
+          if [ "${{ matrix.day_offset }}" = "1" ]; then
+            USERNAME="${{ secrets.KBS_USERNAME }}"
+            PASSWORD="${{ secrets.KBS_PASSWORD }}"
           else
             USERNAME="${{ secrets.KBS_USERNAME }}"
             PASSWORD="${{ secrets.KBS_PASSWORD }}"
