@@ -311,35 +311,35 @@ class KBSBooker:
                 self.log(f"Retry attempt {attempt + 1}/{max_retries} for calendar page...")
                 time.sleep(retry_delay)
             
-            # Step 1: Visit tempahan home
-            self.log("Navigating to tempahan home...")
-            resp = self.session.get(f"{self.BASE_URL}/t_tempahan/tempahan_home.php", timeout=self.DEFAULT_TIMEOUT)
-            if self.debug:
-                self.log(f"tempahan_home.php status: {resp.status_code}")
-            
-            # Step 2: Visit facility list page (sets referrer context)
-            self.log("Navigating to facility list...")
-            list_url = f"{self.BASE_URL}/t_tempahan/tempahan_listfasiliti.php"
-            list_params = {"id": venue_id, "neg": neg}
-            resp = self.session.get(list_url, params=list_params, timeout=self.DEFAULT_TIMEOUT)
-            if self.debug:
-                self.log(f"tempahan_listfasiliti.php status: {resp.status_code}")
-            
-            # Step 3: Get calendar page with proper referrer
-            self.log("Fetching calendar page...")
-            cal_url = f"{self.BASE_URL}/t_tempahan/tempahan_addcal.php"
-            cal_params = {
-                "id": venue_id,
-                "idf": facility_id,
-                "neg": neg
-            }
-            
-            # Set referrer header
-            headers = {
-                "Referer": f"{self.BASE_URL}/t_tempahan/tempahan_listfasiliti.php?id={venue_id}&neg={neg}"
-            }
-            
             try:
+                # Step 1: Visit tempahan home
+                self.log("Navigating to tempahan home...")
+                resp = self.session.get(f"{self.BASE_URL}/t_tempahan/tempahan_home.php", timeout=self.DEFAULT_TIMEOUT)
+                if self.debug:
+                    self.log(f"tempahan_home.php status: {resp.status_code}")
+                
+                # Step 2: Visit facility list page (sets referrer context)
+                self.log("Navigating to facility list...")
+                list_url = f"{self.BASE_URL}/t_tempahan/tempahan_listfasiliti.php"
+                list_params = {"id": venue_id, "neg": neg}
+                resp = self.session.get(list_url, params=list_params, timeout=self.DEFAULT_TIMEOUT)
+                if self.debug:
+                    self.log(f"tempahan_listfasiliti.php status: {resp.status_code}")
+                
+                # Step 3: Get calendar page with proper referrer
+                self.log("Fetching calendar page...")
+                cal_url = f"{self.BASE_URL}/t_tempahan/tempahan_addcal.php"
+                cal_params = {
+                    "id": venue_id,
+                    "idf": facility_id,
+                    "neg": neg
+                }
+                
+                # Set referrer header
+                headers = {
+                    "Referer": f"{self.BASE_URL}/t_tempahan/tempahan_listfasiliti.php?id={venue_id}&neg={neg}"
+                }
+                
                 resp = self.session.get(cal_url, params=cal_params, headers=headers, timeout=self.DEFAULT_TIMEOUT)
             except requests.RequestException as e:
                 self.log(f"Network error on attempt {attempt + 1}: {e}")
