@@ -29,8 +29,8 @@ import argparse
 TIME_SLOTS = {
     0: ("19:00:00", "21:00:00"),  # Monday: 7-9pm (2 hours)
     1: ("19:00:00", "21:00:00"),  # Tuesday: 7-9pm (2 hours)
-    2: ("19:00:00", "20:00:00"),  # Wednesday: 7-9pm (2 hours)
-    3: ("20:00:00", "21:00:00"),  # Thursday: 7-9pm (2 hours)
+    2: ("20:00:00", "21:00:00"),  # Wednesday: 7-9pm (2 hours)
+    3: ("19:00:00", "21:00:00"),  # Thursday: 7-9pm (2 hours)
     4: ("20:00:00", "22:00:00"),  # Friday: 8-10pm (2 hours)
 }
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
