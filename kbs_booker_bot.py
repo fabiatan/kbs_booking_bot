@@ -29,7 +29,7 @@ import argparse
 TIME_SLOTS = {
     0: ("19:00:00", "21:00:00"),  # Monday: 7-9pm (2 hours)
     1: ("19:00:00", "21:00:00"),  # Tuesday: 7-9pm (2 hours)
-    2: ("20:00:00", "21:00:00"),  # Wednesday: 7-9pm (2 hours)
+    2: ("19:00:00", "21:00:00"),  # Wednesday: 7-9pm (2 hours)
     3: ("19:00:00", "21:00:00"),  # Thursday: 7-9pm (2 hours)
     4: ("20:00:00", "22:00:00"),  # Friday: 8-10pm (2 hours)
 }
@@ -138,7 +138,7 @@ def calculate_booking_price(time_start: str, time_end: str) -> tuple:
 
 class KBSBooker:
     BASE_URL = "https://stf.kbs.gov.my"
-    DEFAULT_TIMEOUT = 60  # seconds - prevents hanging on unresponsive server
+    DEFAULT_TIMEOUT = 20  # seconds - server responds in 2-5s normally; 60s was too generous
 
     # Telegram notification config (from environment variables)
     TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -158,6 +158,20 @@ class KBSBooker:
         self.ks_token = None
         self.logged_in = False  # Track login state to skip re-login
         self._cached_facilities = None  # Cache facility list
+    
+    def reset_session(self):
+        """Reset all session state for a fresh retry of the entire flow."""
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-GB,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+        })
+        self.ks_token = None
+        self.logged_in = False
+        self._cached_facilities = None
+        self.log("Session reset for fresh retry.")
     
     def log(self, msg: str):
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -862,6 +876,7 @@ Example:
     parser.add_argument("--day-offset", type=int, default=None, help="Book specific day only (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri). For parallel booking.")
     parser.add_argument("--weeks-ahead", type=int, default=9, help="Number of weeks ahead to book (default: 9)")
     parser.add_argument("--summary-report", action="store_true", help="Generate summary report from JSON result files (parallel booking only)")
+    parser.add_argument("--max-run-attempts", type=int, default=3, help="Max outer retry attempts if run() fails (default: 3, with 120s cooldown between)")
     
     args = parser.parse_args()
 
@@ -889,19 +904,31 @@ Example:
         
         config = build_config(args, date, time_start, time_end)
         
-        result = booker.run(config, poll_timeout=args.poll_timeout, check_interval=args.check_interval)
-        
-        if isinstance(result, dict):
-            success = result.get("success", False)
-            court_name = result.get("court_name", "Unknown")
-        else:
-            success = bool(result)
-            court_name = "Unknown"
+        success = False
+        court_name = "Unknown"
+        for run_attempt in range(1, args.max_run_attempts + 1):
+            result = booker.run(config, poll_timeout=args.poll_timeout, check_interval=args.check_interval)
+            
+            if isinstance(result, dict):
+                success = result.get("success", False)
+                court_name = result.get("court_name", "Unknown")
+            else:
+                success = bool(result)
+                court_name = "Unknown"
+            
+            if success:
+                break
+            
+            if run_attempt < args.max_run_attempts:
+                cooldown = 120
+                print(f"Attempt {run_attempt}/{args.max_run_attempts} failed. Cooling down {cooldown}s before retry...")
+                time.sleep(cooldown)
+                booker.reset_session()
         
         if success:
             print(f"✅ {day_name} booked successfully! (Court: {court_name})")
         else:
-            print(f"❌ {day_name} booking failed.")
+            print(f"❌ {day_name} booking failed after {args.max_run_attempts} attempts.")
         
         # Save result to JSON for aggregation
         result_data = {
@@ -1044,7 +1071,17 @@ Example:
             
             # For weekly booking, use shorter timeout per slot
             slot_timeout = min(args.poll_timeout // 5, 600)  # Max 10 min per slot
-            result = booker.run(config, poll_timeout=slot_timeout, check_interval=args.check_interval)
+            
+            result = {"success": False, "court_name": None}
+            for run_attempt in range(1, args.max_run_attempts + 1):
+                result = booker.run(config, poll_timeout=slot_timeout, check_interval=args.check_interval)
+                if isinstance(result, dict) and result.get("success"):
+                    break
+                if run_attempt < args.max_run_attempts:
+                    cooldown = 120
+                    print(f"Attempt {run_attempt}/{args.max_run_attempts} for {day_name} failed. Cooling down {cooldown}s...")
+                    time.sleep(cooldown)
+                    booker.reset_session()
             
             # Handle dict return format
             if isinstance(result, dict):
@@ -1126,17 +1163,31 @@ Example:
         print(f"Auto-calculated booking: {args.date} {args.time_start}-{args.time_end}")
 
     config = build_config(args, args.date, args.time_start, args.time_end)
-    result = booker.run(
-        config,
-        poll_timeout=args.poll_timeout,
-        check_interval=args.check_interval
-    )
     
-    # Handle dict return format
-    if isinstance(result, dict):
-        success = result.get("success", False)
-    else:
-        success = bool(result)
+    success = False
+    for run_attempt in range(1, args.max_run_attempts + 1):
+        result = booker.run(
+            config,
+            poll_timeout=args.poll_timeout,
+            check_interval=args.check_interval
+        )
+        
+        if isinstance(result, dict):
+            success = result.get("success", False)
+        else:
+            success = bool(result)
+        
+        if success:
+            break
+        
+        if run_attempt < args.max_run_attempts:
+            cooldown = 120
+            print(f"Attempt {run_attempt}/{args.max_run_attempts} failed. Cooling down {cooldown}s before retry...")
+            time.sleep(cooldown)
+            booker.reset_session()
+    
+    if not success:
+        print(f"Booking failed after {args.max_run_attempts} attempts.")
     
     return 0 if success else 1
 
