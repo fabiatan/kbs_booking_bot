@@ -38,6 +38,109 @@ DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 # Malaysia timezone (UTC+8) - ensures correct date calculation on GitHub Actions
 MYT = timezone(timedelta(hours=8))
 
+
+# =============================================================================
+# Retry Configuration & Error Handling
+# =============================================================================
+
+class RetryConfig:
+    """Centralized configuration for retry strategies with exponential backoff"""
+
+    # Network operation retry settings
+    MAX_RETRIES = 3
+    INITIAL_DELAY = 1.0  # seconds
+    MAX_DELAY = 30.0  # seconds
+    BACKOFF_FACTOR = 2.0  # exponential multiplier
+    JITTER_RANGE = 0.1  # +/- 10% randomness to prevent thundering herd
+
+    # Session refresh threshold (seconds) - refresh token if polling exceeds this
+    SESSION_REFRESH_THRESHOLD = 300  # 5 minutes
+
+    # Timeout settings for different operations
+    TIMEOUT_DEFAULT = 60  # General timeout
+    TIMEOUT_CHECK_SLOT = 10  # Fast timeout for polling checks
+    TIMEOUT_BOOK_SLOT = 30  # Critical booking operation
+    TIMEOUT_CONFIRM = 20  # Confirmation timeout
+
+    @staticmethod
+    def calculate_delay(attempt: int) -> float:
+        """Calculate exponential backoff delay with jitter"""
+        import random
+        base_delay = min(
+            RetryConfig.INITIAL_DELAY * (RetryConfig.BACKOFF_FACTOR ** attempt),
+            RetryConfig.MAX_DELAY
+        )
+        jitter = base_delay * RetryConfig.JITTER_RANGE * (2 * random.random() - 1)
+        return base_delay + jitter
+
+
+class KBSBookingError(Exception):
+    """Base exception for KBS booking operations"""
+    pass
+
+
+class NetworkError(KBSBookingError):
+    """Network operation failed after retries"""
+    pass
+
+
+class SessionExpiredError(KBSBookingError):
+    """Session or token expired during operation"""
+    pass
+
+
+def retry_with_backoff(max_retries=None, operation_name="operation"):
+    """
+    Decorator for retrying operations with exponential backoff.
+
+    Args:
+        max_retries: Max retry attempts (defaults to RetryConfig.MAX_RETRIES)
+        operation_name: Human-readable name for logging
+    """
+    import functools
+
+    if max_retries is None:
+        max_retries = RetryConfig.MAX_RETRIES
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            last_exception = None
+
+            for attempt in range(max_retries):
+                try:
+                    return func(self, *args, **kwargs)
+                except requests.RequestException as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        delay = RetryConfig.calculate_delay(attempt)
+                        self.log(f"⚠️  {operation_name} failed (attempt {attempt + 1}/{max_retries}): {e}")
+                        self.log(f"   Retrying in {delay:.1f}s...")
+                        time.sleep(delay)
+                    else:
+                        self.log(f"❌ {operation_name} failed after {max_retries} attempts: {e}")
+
+            raise NetworkError(f"{operation_name} failed after {max_retries} attempts: {last_exception}")
+
+        return wrapper
+    return decorator
+
+
+def handle_booking_result(result) -> tuple:
+    """
+    Extract success and court_name from booking result.
+
+    Args:
+        result: Either a dict with 'success' and 'court_name' keys, or a bool
+
+    Returns:
+        tuple: (success: bool, court_name: str)
+    """
+    if isinstance(result, dict):
+        return result.get("success", False), result.get("court_name", "Unknown")
+    return bool(result), "Unknown"
+
+
 def get_booking_target(day_offset=None, weeks_ahead=8):
     """
     Calculate booking target(s) for N weeks from now.
@@ -402,20 +505,23 @@ class KBSBooker:
         self.log(f"ERROR: Failed to get ks_token after {max_retries} attempts")
         return resp.text
     
-    def check_slot(self, facility_id: int, tjk_id: int, date: str, 
+    def check_slot(self, facility_id: int, tjk_id: int, date: str,
                    time_start: str, time_end: str) -> dict:
         """
-        Check if slot is available via check.php
-        
+        Check if slot is available via check.php.
+
+        Uses a shorter timeout since this is called frequently during polling.
+        On errors, returns unavailable to continue polling rather than crashing.
+
         Args:
             facility_id: Numeric facility ID (e.g., 477)
             tjk_id: Slot type ID (e.g., 528)
             date: Date in DD/MM/YYYY format
             time_start: Start time HH:MM:SS
             time_end: End time HH:MM:SS
-        
+
         Returns:
-            dict with 'available' boolean and raw response
+            dict with 'available' boolean, 'status' code, and raw 'text'
         """
         url = f"{self.BASE_URL}/check.php"
         data = {
@@ -425,38 +531,57 @@ class KBSBooker:
             "tjkid": tjk_id,
             "tarikhmula": date
         }
-        
-        resp = self.session.post(url, data=data)
-        
-        # Determine availability from response
-        # Empty or "0" typically means available, "1" or message means taken
-        text = resp.text.strip().lower()
-        available = text in ["", "0", "ok", "available"] or "tiada" not in text
-        
-        if self.debug:
-            self.log(f"check.php response: '{resp.text[:100]}' -> available: {available}")
-        
-        return {
-            "status": resp.status_code,
-            "available": available,
-            "text": resp.text
-        }
+
+        try:
+            resp = self.session.post(url, data=data, timeout=RetryConfig.TIMEOUT_CHECK_SLOT)
+
+            # Handle server errors gracefully
+            if resp.status_code >= 500:
+                self.log(f"⚠️  Server error checking slot: {resp.status_code}")
+                return {"status": resp.status_code, "available": False, "text": f"Server error: {resp.status_code}"}
+
+            # Determine availability from response
+            text = resp.text.strip().lower()
+            available = text in ["", "0", "ok", "available"] or "tiada" not in text
+
+            if self.debug:
+                self.log(f"check.php response: '{resp.text[:100]}' -> available: {available}")
+
+            return {"status": resp.status_code, "available": available, "text": resp.text}
+
+        except requests.Timeout:
+            self.log(f"⚠️  Timeout checking slot ({RetryConfig.TIMEOUT_CHECK_SLOT}s)")
+            return {"status": 0, "available": False, "text": "Timeout"}
+        except requests.RequestException as e:
+            self.log(f"⚠️  Network error checking slot: {e}")
+            return {"status": 0, "available": False, "text": f"Network error: {e}"}
     
+    @retry_with_backoff(max_retries=3, operation_name="Book slot")
     def book_slot(self, config: dict) -> dict:
         """
-        Submit booking via tempahan_addhandler.php
-        
+        Submit booking via tempahan_addhandler.php with retry and timeout.
+
         Args:
             config: Booking configuration dict with all required fields
+
+        Returns:
+            dict with 'success', 'status', 'url', 'booking_id'
+
+        Raises:
+            SessionExpiredError: If session/token is invalid
+            NetworkError: If booking fails after retries
         """
+        # Validate ks_token exists
+        if not self.ks_token:
+            raise SessionExpiredError("No ks_token available - session may have expired")
+
         url = f"{self.BASE_URL}/t_tempahan/tempahan_addhandler.php"
-        
-        # Calculate hours
+
         # Calculate hours and price
         hours, total_price_calc, _ = calculate_booking_price(config["time_start"], config["time_end"])
         total_price = config.get("total_price") or str(total_price_calc)
-        
-        # Build form data based on HAR capture
+
+        # Build form data
         data = {
             "tt_jeniskadar": config.get("jeniskadar", "1"),
             "tt_tarikh_mula": config["date"],
@@ -485,25 +610,27 @@ class KBSBooker:
             "kodneg": config.get("neg", "07"),
             "btnsubmit": ""
         }
-        
+
         self.log(f"Submitting booking: {config['date']} {config['time_start']}-{config['time_end']}")
-        
-        resp = self.session.post(url, data=data, allow_redirects=True)
-        
+
+        resp = self.session.post(url, data=data, allow_redirects=True, timeout=RetryConfig.TIMEOUT_BOOK_SLOT)
+
+        # Check for session expiration (redirected to login)
+        if "login" in resp.url.lower():
+            raise SessionExpiredError("Session expired during booking - redirected to login")
+
         success = "added" in resp.url or "msg=added" in resp.url or "berjaya" in resp.text.lower()
-        
-        # Extract booking ID from redirect URL for confirmation step
+
+        # Extract booking ID for confirmation
         booking_id = None
         if success:
-            # The redirect URL contains encoded booking ID, need to parse the list page
-            # to get the numeric idp value
             booking_id = self._extract_booking_id(resp.text, resp.url)
-        
+
         if self.debug:
             self.log(f"Booking response URL: {resp.url}")
             self.log(f"Booking ID extracted: {booking_id}")
             self.log(f"Booking response: {resp.text[:300]}")
-        
+
         return {
             "status": resp.status_code,
             "success": success,
@@ -552,15 +679,117 @@ class KBSBooker:
             "url": resp.url
         }
     
+    # =========================================================================
+    # Helper Methods (extracted to reduce complexity in run())
+    # =========================================================================
+
+    def _get_booking_details(self, config: dict) -> dict:
+        """Calculate booking details from config (hours, day_name, etc.)"""
+        t_start = datetime.strptime(config["time_start"], "%H:%M:%S")
+        t_end = datetime.strptime(config["time_end"], "%H:%M:%S")
+        hours = int((t_end - t_start).seconds / 3600)
+        booking_date = datetime.strptime(config["date"], "%d/%m/%Y")
+        return {
+            "hours": hours,
+            "day_name": booking_date.strftime("%A"),
+            "date": config["date"],
+            "time_start": config["time_start"],
+            "time_end": config["time_end"]
+        }
+
+    def _get_facility_name(self, facility_index: int) -> str:
+        """Get human-readable facility name from index"""
+        return "Gelanggang Tenis 1" if facility_index == 0 else "Gelanggang Tenis 2"
+
+    def _confirm_and_notify(self, result: dict, config: dict, facility_name: str, is_retry: bool = False) -> dict:
+        """Confirm booking and send Telegram notification on success."""
+        details = self._get_booking_details(config)
+
+        if result.get("booking_id"):
+            self.log("Confirming booking...")
+            _, total_price_calc, _ = calculate_booking_price(config["time_start"], config["time_end"])
+            confirm_result = self.confirm_booking(
+                booking_id=result["booking_id"],
+                total_price=str(total_price_calc)
+            )
+            if confirm_result["success"]:
+                self.log(f"CONFIRMED! {confirm_result['url']}")
+                retry_tag = " (Retry Facility)" if is_retry else ""
+                self.send_telegram(
+                    f"✅ <b>SUCCESS!{retry_tag}</b>\n"
+                    f"Location: Kompleks Sukan KBS\n"
+                    f"Court: {facility_name}\n"
+                    f"Date: {details['date']} ({details['day_name']})\n"
+                    f"Time: {details['time_start']}-{details['time_end']} ({details['hours']}-hours)"
+                )
+            else:
+                self.log("WARNING: Confirmation may have failed")
+                self.send_telegram("⚠️ Booking created but confirmation may have failed")
+        else:
+            self.log("WARNING: Booking ID not found, skipping confirmation.")
+
+        return {"success": True, "court_name": facility_name}
+
+    def _try_backup_facility(self, config: dict, facilities: list) -> dict:
+        """
+        Attempt booking on backup facility if primary fails.
+
+        Returns:
+            dict: {"success": bool, "court_name": str or None}
+        """
+        retry_index = config.get("retry_facility_index")
+        if retry_index is None:
+            return {"success": False, "court_name": None}
+
+        if retry_index < 0 or retry_index >= len(facilities):
+            self.log(f"Invalid retry facility index: {retry_index}")
+            return {"success": False, "court_name": None}
+
+        self.log(f"Primary booking failed. Trying backup facility (index {retry_index})...")
+
+        # Get backup facility
+        new_facility = facilities[retry_index]
+        self.log(f"Switching to facility: {new_facility['facility_id_encoded']}")
+
+        # Create modified config for backup facility
+        backup_config = config.copy()
+        backup_config["facility_id_encoded"] = new_facility.get("facility_id_encoded", config.get("retry_facility_id"))
+
+        if config.get("retry_facility_id_num"):
+            backup_config["facility_id"] = config["retry_facility_id_num"]
+        if config.get("retry_tjk_id"):
+            backup_config["tjk_id"] = config["retry_tjk_id"]
+
+        self.log(f"Backup config: facility_id={backup_config['facility_id']}, tjk_id={backup_config['tjk_id']}")
+
+        # Attempt booking on backup facility
+        time.sleep(1.0)  # Small delay before retry
+        try:
+            retry_result = self.book_slot(backup_config)
+            if retry_result["success"]:
+                self.log(f"SUCCESS! Backup booking created: {retry_result['url']}")
+                facility_name = self._get_facility_name(retry_index)
+                return self._confirm_and_notify(retry_result, backup_config, facility_name, is_retry=True)
+            else:
+                self.log("Backup facility booking also failed.")
+                return {"success": False, "court_name": None}
+        except (NetworkError, SessionExpiredError) as e:
+            self.log(f"Backup facility booking error: {e}")
+            return {"success": False, "court_name": None}
+
+    # =========================================================================
+    # Main Booking Flow
+    # =========================================================================
+
     def run(self, config: dict, poll_timeout: int, check_interval: float = 1.0) -> dict:
         """
-        Main booking flow - polls for availability and books when slot opens
+        Main booking flow - polls for availability and books when slot opens.
 
         Args:
             config: Booking configuration
             poll_timeout: Max seconds to poll
             check_interval: Seconds between availability checks
-        
+
         Returns:
             dict: {"success": bool, "court_name": str or None}
         """
@@ -658,16 +887,14 @@ class KBSBooker:
 
         start_time = datetime.now()
         check_count = 0
-        slot_available_notified = False
 
         while True:
-            now = datetime.now()
-            elapsed = (now - start_time).total_seconds()
-            
+            check_count += 1
+            elapsed = (datetime.now() - start_time).total_seconds()
+
             # Check timeout
             if elapsed > poll_timeout:
                 self.log(f"Timeout after {poll_timeout}s ({check_count} checks)")
-                # Skip Telegram notification for timeout - waste of time
                 return {"success": False, "court_name": None}
 
             # Check availability
@@ -681,18 +908,9 @@ class KBSBooker:
 
             if avail["available"]:
                 self.log(f"SLOT AVAILABLE! Detected after {elapsed:.1f}s ({check_count} checks)")
-                # Calculate booking duration and day name
-                t_start = datetime.strptime(config["time_start"], "%H:%M:%S")
-                t_end = datetime.strptime(config["time_end"], "%H:%M:%S")
-                hours = int((t_end - t_start).seconds / 3600)
-                booking_date = datetime.strptime(config["date"], "%d/%m/%Y")
-                day_name = booking_date.strftime("%A")
-                if not slot_available_notified:
-                    # Skip Telegram notification for slot available - proceed directly to booking
-                    slot_available_notified = True
 
-                # Refresh token before booking (session may have aged)
-                if elapsed > 2400:  # Refresh if waited more than 40 mins
+                # Refresh token if session may have aged
+                if elapsed > RetryConfig.SESSION_REFRESH_THRESHOLD:
                     self.log("Refreshing session token...")
                     self.get_calendar_page(
                         venue_id=config["venue_id"],
@@ -700,131 +918,33 @@ class KBSBooker:
                         neg=config.get("neg", "07")
                     )
 
-                # Immediately book
+                # Attempt booking
                 self.log("Step 5: Booking slot...")
-                result = self.book_slot(config)
+                try:
+                    result = self.book_slot(config)
+                except SessionExpiredError as e:
+                    self.log(f"⚠️  Session expired: {e}")
+                    self.log("Continuing to poll...")
+                    time.sleep(check_interval)
+                    continue
+                except NetworkError as e:
+                    self.log(f"⚠️  Booking network error: {e}")
+                    self.log("Continuing to poll...")
+                    time.sleep(check_interval)
+                    continue
 
                 if result["success"]:
                     self.log(f"SUCCESS! Booking created: {result['url']}")
-                    # Determine facility name based on index (set once here)
-                    facility_name = "Gelanggang Tenis 1" if config.get("facility_index", 0) == 0 else "Gelanggang Tenis 2"
-
-                    # Confirm booking
-                    if result.get("booking_id"):
-                        self.log("Step 6: Confirming booking...")
-                        _, total_price_calc, _ = calculate_booking_price(config["time_start"], config["time_end"])
-                        confirm_result = self.confirm_booking(
-                            booking_id=result["booking_id"],
-                            total_price=str(total_price_calc)
-                        )
-                        if confirm_result["success"]:
-                            self.log(f"CONFIRMED! {confirm_result['url']}")
-                        else:
-                            self.log("WARNING: Confirmation may have failed")
-                            self.send_telegram(f"⚠️ Booking created but confirmation may have failed")
-                    else:
-                        self.log("WARNING: Booking ID not found, skipping confirmation.")
-
-                    return {"success": True, "court_name": facility_name}
+                    facility_name = self._get_facility_name(config.get("facility_index", 0))
+                    return self._confirm_and_notify(result, config, facility_name)
                 else:
-                    self.log("Booking failed, continuing to poll...")
-                    # Retry logic for failed booking
-                    if config.get("retry_facility_index") is not None:
-                        retry_index = config["retry_facility_index"]
-                        self.log(f"Primary booking failed. Retrying with facility index {retry_index}...")
-                        
-                        # Fetch new facility details
-                        facilities = self.get_facility_list(config["venue_id"], config.get("neg", "07"))
-                        if 0 <= retry_index < len(facilities):
-                            new_facility = facilities[retry_index]
-                            self.log(f"Switching to facility: {new_facility['facility_id_encoded']}")
-                            
-                            # Update config for retry
-                            # Prefer fetched ID from index if available, otherwise use strict default from args
-                            if 'facility_id_encoded' in new_facility:
-                                config["facility_id_encoded"] = new_facility['facility_id_encoded']
-                            elif config.get("retry_facility_id"):
-                                config["facility_id_encoded"] = config["retry_facility_id"]
-                            
-                            # Save original numeric ID before switching
-                            original_num = config.get("facility_id")
-                            
-                            # Update Numeric ID
-                            if config.get("retry_facility_id_num"):
-                                config["facility_id"] = config["retry_facility_id_num"]
-                            
-                            # Update TJK ID (Crucial fix for different facilities)
-                            original_tjk = config.get("tjk_id")
-                            if config.get("retry_tjk_id"):
-                                config["tjk_id"] = config["retry_tjk_id"]
-                            
-                            # RE-ATTEMPT BOOKING with the new facility
-                            self.log(f"Re-attempting booking with facility: {config['facility_id_encoded']} (Num ID: {config['facility_id']}, TJK: {config['tjk_id']})...")
-                            time.sleep(1.0) # Small delay before retry
-                            retry_result = self.book_slot(config)
-                            
-                            if retry_result["success"]:
-                                self.log(f"SUCCESS! Retry booking created: {retry_result['url']}")
-                                # Calculate booking details once (available for all paths)
-                                t_start = datetime.strptime(config["time_start"], "%H:%M:%S")
-                                t_end = datetime.strptime(config["time_end"], "%H:%M:%S")
-                                hours = int((t_end - t_start).seconds / 3600)
-                                booking_date = datetime.strptime(config["date"], "%d/%m/%Y")
-                                day_name = booking_date.strftime("%A")
-                                retry_name = "Gelanggang Tenis 1" if retry_index == 0 else "Gelanggang Tenis 2"
-
-                                if retry_result.get("booking_id"):
-                                    self.log("Step 6: Confirming retry booking...")
-                                    hours, total_price_calc, _ = calculate_booking_price(config["time_start"], config["time_end"])
-                                    confirm_result = self.confirm_booking(
-                                        booking_id=retry_result["booking_id"],
-                                        total_price=str(total_price_calc)
-                                    )
-                                    if confirm_result["success"]:
-                                        self.log(f"CONFIRMED! {confirm_result['url']}")
-
-                                        self.send_telegram(
-                                            f"✅ <b>SUCCESS! (Retry Facility)</b>\n"
-                                            f"Location: Kompleks Sukan KBS\n"
-                                            f"Court: {retry_name}\n"
-                                            f"Date: {config['date']} ({day_name})\n"
-                                            f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)"
-                                        )
-                                    else:
-                                        self.log("WARNING: Retry booking created but confirmation may have failed")
-                                        self.send_telegram(f"⚠️ Retry booking created but confirmation may have failed")
-                                else:
-                                    self.log("WARNING: Retry Booking ID not found, skipping confirmation.")
-                                    self.send_telegram(
-                                       f"✅ <b>BOOKING CREATED! (Retry)</b> (Confirmation skipped)\n"
-                                       f"Location: Kompleks Sukan KBS\n"
-                                       f"Court: {retry_name}\n"
-                                       f"Date: {config['date']} ({day_name})\n"
-                                       f"Time: {config['time_start']}-{config['time_end']} ({hours}-hours)\n"
-                                       f"Check website to verify status."
-                                    )
-                                return {"success": True, "court_name": retry_name}  # EXIT after successful backup booking
-                            else:
-                                self.log(f"Secondary booking with facility index {retry_index} also failed.")
-                                # self.send_telegram(f"❌ Booking failed - primary and retry facilities failed.")
-                                # Don't exit here, maybe primary becomes available? Or just fail?
-                                # If fast book, we might loop. If standard, we loop.
-                                
-                                # Revert ID to primary for next loop iteration check
-                                config["facility_id_encoded"] = facilities[config.get("facility_index", 0)]['facility_id_encoded']
-                                config["facility_id"] = original_num
-                                config["tjk_id"] = original_tjk
-                                
-                                # Do NOT return False here. We want to continue polling if retry failed.
-                                # Just log and loop around.
-                                self.log("Continuing to poll...")
-                                pass 
-                        else:
-                            self.log(f"Invalid retry facility index: {retry_index}. Cannot retry.")
-                            pass
-                    else:
-                        # No retry facility configured, so just log and continue polling
-                        pass
+                    # Primary booking failed - try backup facility
+                    self.log("Primary booking failed, trying backup...")
+                    backup_result = self._try_backup_facility(config, facilities)
+                    if backup_result["success"]:
+                        return backup_result
+                    # Both failed - continue polling
+                    self.log("Continuing to poll...")
 
             # Progress update every 60 checks
             if check_count % 60 == 0:
@@ -908,17 +1028,11 @@ Example:
         court_name = "Unknown"
         for run_attempt in range(1, args.max_run_attempts + 1):
             result = booker.run(config, poll_timeout=args.poll_timeout, check_interval=args.check_interval)
-            
-            if isinstance(result, dict):
-                success = result.get("success", False)
-                court_name = result.get("court_name", "Unknown")
-            else:
-                success = bool(result)
-                court_name = "Unknown"
-            
+            success, court_name = handle_booking_result(result)
+
             if success:
                 break
-            
+
             if run_attempt < args.max_run_attempts:
                 cooldown = 120
                 print(f"Attempt {run_attempt}/{args.max_run_attempts} failed. Cooling down {cooldown}s before retry...")
@@ -1071,26 +1185,19 @@ Example:
             
             # For weekly booking, use shorter timeout per slot
             slot_timeout = min(args.poll_timeout // 5, 600)  # Max 10 min per slot
-            
-            result = {"success": False, "court_name": None}
+            success = False
+            court_name = "Unknown"
             for run_attempt in range(1, args.max_run_attempts + 1):
                 result = booker.run(config, poll_timeout=slot_timeout, check_interval=args.check_interval)
-                if isinstance(result, dict) and result.get("success"):
+                success, court_name = handle_booking_result(result)
+
+                if success:
                     break
                 if run_attempt < args.max_run_attempts:
                     cooldown = 120
                     print(f"Attempt {run_attempt}/{args.max_run_attempts} for {day_name} failed. Cooling down {cooldown}s...")
                     time.sleep(cooldown)
                     booker.reset_session()
-            
-            # Handle dict return format
-            if isinstance(result, dict):
-                success = result.get("success", False)
-                court_name = result.get("court_name", "Unknown")
-            else:
-                # Fallback for bool return (shouldn't happen but just in case)
-                success = bool(result)
-                court_name = "Unknown"
             
             results.append((day_name, date, time_start, time_end, success, court_name))
             
@@ -1163,7 +1270,6 @@ Example:
         print(f"Auto-calculated booking: {args.date} {args.time_start}-{args.time_end}")
 
     config = build_config(args, args.date, args.time_start, args.time_end)
-    
     success = False
     for run_attempt in range(1, args.max_run_attempts + 1):
         result = booker.run(
@@ -1171,21 +1277,17 @@ Example:
             poll_timeout=args.poll_timeout,
             check_interval=args.check_interval
         )
-        
-        if isinstance(result, dict):
-            success = result.get("success", False)
-        else:
-            success = bool(result)
-        
+        success, _ = handle_booking_result(result)
+
         if success:
             break
-        
+
         if run_attempt < args.max_run_attempts:
             cooldown = 120
             print(f"Attempt {run_attempt}/{args.max_run_attempts} failed. Cooling down {cooldown}s before retry...")
             time.sleep(cooldown)
             booker.reset_session()
-    
+
     if not success:
         print(f"Booking failed after {args.max_run_attempts} attempts.")
     
