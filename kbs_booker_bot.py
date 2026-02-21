@@ -53,6 +53,9 @@ class RetryConfig:
     BACKOFF_FACTOR = 2.0  # exponential multiplier
     JITTER_RANGE = 0.1  # +/- 10% randomness to prevent thundering herd
 
+    # Session refresh threshold (seconds) - refresh token if polling exceeds this
+    SESSION_REFRESH_THRESHOLD = 300  # 5 minutes
+
     # Timeout settings for different operations
     TIMEOUT_DEFAULT = 60  # General timeout
     TIMEOUT_CHECK_SLOT = 10  # Fast timeout for polling checks

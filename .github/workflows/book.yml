@@ -2,7 +2,7 @@ name: KBS Booking Bot
 
 on:
   schedule:
-    - cron: '50 15 * * *'  # 11:55 PM MYT everyday
+    - cron: '40 15 * * *'  # 11:40 PM MYT everyday
   workflow_dispatch:
     inputs:
       poll_timeout:
