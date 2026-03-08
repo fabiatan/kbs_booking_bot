@@ -110,6 +110,7 @@ def build_config(args, date: str, time_start: str, time_end: str) -> dict:
         "neg": args.neg,
         "num_users": args.num_users,
         "purpose": args.purpose,
+        "skip_calendar": getattr(args, "skip_calendar", False),
     }
 
 
@@ -139,6 +140,7 @@ def calculate_booking_price(time_start: str, time_end: str) -> tuple:
 class KBSBooker:
     BASE_URL = "https://stf.kbs.gov.my"
     DEFAULT_TIMEOUT = 20  # seconds - server responds in 2-5s normally; 60s was too generous
+    CALENDAR_TIMEOUT = 8  # shorter timeout for calendar page; fail fast and retry more often
 
     # Telegram notification config (from environment variables)
     TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -156,6 +158,7 @@ class KBSBooker:
             "Accept-Encoding": "gzip, deflate, br",
         })
         self.ks_token = None
+        self._last_ks_token = None  # Stale fallback token from last successful extraction
         self.logged_in = False  # Track login state to skip re-login
         self._cached_facilities = None  # Cache facility list
     
@@ -304,14 +307,17 @@ class KBSBooker:
         
         return facilities
     
-    def get_calendar_page(self, venue_id: str, facility_id: str, neg: str = "07", max_retries: int = 5, retry_delay: float = 3.0) -> str:
+    def get_calendar_page(self, venue_id: str, facility_id: str, neg: str = "07", max_retries: int = 8, retry_delay: float = 3.0) -> str:
         """
         Navigate to calendar page to extract ks_token
         
         Must follow proper navigation path:
-        1. tempahan_home.php
-        2. tempahan_listfasiliti.php (sets session/referrer)
+        1. tempahan_home.php (first attempt only - sets session)
+        2. tempahan_listfasiliti.php (first attempt only - sets referrer)
         3. tempahan_addcal.php (contains ks_token)
+        
+        On retries, skips steps 1-2 since session/referrer are already set.
+        Uses CALENDAR_TIMEOUT (shorter) for the calendar page to fail fast.
         
         Args:
             venue_id: Encoded venue ID (e.g., 'GxqArR56DGE8ZKkBI2f9')
@@ -320,27 +326,30 @@ class KBSBooker:
             max_retries: Maximum retry attempts if token extraction fails
             retry_delay: Seconds to wait between retries
         """
+        resp = None
         for attempt in range(max_retries):
             if attempt > 0:
                 self.log(f"Retry attempt {attempt + 1}/{max_retries} for calendar page...")
                 time.sleep(retry_delay)
             
             try:
-                # Step 1: Visit tempahan home
-                self.log("Navigating to tempahan home...")
-                resp = self.session.get(f"{self.BASE_URL}/t_tempahan/tempahan_home.php", timeout=self.DEFAULT_TIMEOUT)
-                if self.debug:
-                    self.log(f"tempahan_home.php status: {resp.status_code}")
+                # Steps 1-2 only on first attempt (sets session cookies and referrer)
+                if attempt == 0:
+                    # Step 1: Visit tempahan home
+                    self.log("Navigating to tempahan home...")
+                    resp = self.session.get(f"{self.BASE_URL}/t_tempahan/tempahan_home.php", timeout=self.DEFAULT_TIMEOUT)
+                    if self.debug:
+                        self.log(f"tempahan_home.php status: {resp.status_code}")
+                    
+                    # Step 2: Visit facility list page (sets referrer context)
+                    self.log("Navigating to facility list...")
+                    list_url = f"{self.BASE_URL}/t_tempahan/tempahan_listfasiliti.php"
+                    list_params = {"id": venue_id, "neg": neg}
+                    resp = self.session.get(list_url, params=list_params, timeout=self.DEFAULT_TIMEOUT)
+                    if self.debug:
+                        self.log(f"tempahan_listfasiliti.php status: {resp.status_code}")
                 
-                # Step 2: Visit facility list page (sets referrer context)
-                self.log("Navigating to facility list...")
-                list_url = f"{self.BASE_URL}/t_tempahan/tempahan_listfasiliti.php"
-                list_params = {"id": venue_id, "neg": neg}
-                resp = self.session.get(list_url, params=list_params, timeout=self.DEFAULT_TIMEOUT)
-                if self.debug:
-                    self.log(f"tempahan_listfasiliti.php status: {resp.status_code}")
-                
-                # Step 3: Get calendar page with proper referrer
+                # Step 3: Get calendar page with proper referrer (shorter timeout)
                 self.log("Fetching calendar page...")
                 cal_url = f"{self.BASE_URL}/t_tempahan/tempahan_addcal.php"
                 cal_params = {
@@ -354,7 +363,7 @@ class KBSBooker:
                     "Referer": f"{self.BASE_URL}/t_tempahan/tempahan_listfasiliti.php?id={venue_id}&neg={neg}"
                 }
                 
-                resp = self.session.get(cal_url, params=cal_params, headers=headers, timeout=self.DEFAULT_TIMEOUT)
+                resp = self.session.get(cal_url, params=cal_params, headers=headers, timeout=self.CALENDAR_TIMEOUT)
             except requests.RequestException as e:
                 self.log(f"Network error on attempt {attempt + 1}: {e}")
                 continue
@@ -386,6 +395,7 @@ class KBSBooker:
                 match = re.search(pattern, resp.text, re.IGNORECASE)
                 if match:
                     self.ks_token = match.group(1)
+                    self._last_ks_token = self.ks_token  # Cache for stale fallback
                     self.log(f"Got ks_token: {self.ks_token}")
                     return resp.text  # Success - exit retry loop
             
@@ -400,7 +410,7 @@ class KBSBooker:
         
         # All retries exhausted
         self.log(f"ERROR: Failed to get ks_token after {max_retries} attempts")
-        return resp.text
+        return resp.text if resp is not None else ""
     
     def check_slot(self, facility_id: int, tjk_id: int, date: str, 
                    time_start: str, time_end: str) -> dict:
@@ -638,8 +648,11 @@ class KBSBooker:
         # Update config with fresh encoded ID
         fresh_facility_id = selected_facility["facility_id_encoded"]
         
-        # Step 3: Get calendar page for ks_token (skip if cached)
-        if self.ks_token:
+        # Step 3: Get calendar page for ks_token (skip if cached or --skip-calendar)
+        if config.get("skip_calendar"):
+            self.ks_token = self.ks_token or self._last_ks_token or "skip"
+            self.log(f"Step 3: Skipping calendar page (--skip-calendar). Using ks_token: {self.ks_token}")
+        elif self.ks_token:
             self.log("Step 3: Using cached ks_token, skipping calendar page...")
         else:
             self.log("Step 3: Fetching calendar page for token...")
@@ -650,8 +663,13 @@ class KBSBooker:
             )
             
             if not self.ks_token:
-                self.log("ERROR: Could not get ks_token!")
-                return {"success": False, "court_name": None}
+                # Try stale token fallback (PHP CSRF tokens often outlive the page load)
+                if self._last_ks_token:
+                    self.ks_token = self._last_ks_token
+                    self.log(f"Using stale ks_token fallback: {self.ks_token}")
+                else:
+                    self.log("ERROR: Could not get ks_token!")
+                    return {"success": False, "court_name": None}
         
         # Step 4: Poll for availability
         self.log(f"Step 4: Polling for availability (timeout: {poll_timeout}s, interval: {check_interval}s)...")
@@ -877,6 +895,7 @@ Example:
     parser.add_argument("--weeks-ahead", type=int, default=9, help="Number of weeks ahead to book (default: 9)")
     parser.add_argument("--summary-report", action="store_true", help="Generate summary report from JSON result files (parallel booking only)")
     parser.add_argument("--max-run-attempts", type=int, default=3, help="Max outer retry attempts if run() fails (default: 3, with 120s cooldown between)")
+    parser.add_argument("--skip-calendar", action="store_true", help="Skip calendar page fetch (use dummy ks_token). Try this when server is overloaded.")
     
     args = parser.parse_args()
 
@@ -920,7 +939,7 @@ Example:
                 break
             
             if run_attempt < args.max_run_attempts:
-                cooldown = 120
+                cooldown = 30 * (2 ** (run_attempt - 1))  # 30s, 60s, 120s...
                 print(f"Attempt {run_attempt}/{args.max_run_attempts} failed. Cooling down {cooldown}s before retry...")
                 time.sleep(cooldown)
                 booker.reset_session()
@@ -1181,7 +1200,7 @@ Example:
             break
         
         if run_attempt < args.max_run_attempts:
-            cooldown = 120
+            cooldown = 30 * (2 ** (run_attempt - 1))  # 30s, 60s, 120s...
             print(f"Attempt {run_attempt}/{args.max_run_attempts} failed. Cooling down {cooldown}s before retry...")
             time.sleep(cooldown)
             booker.reset_session()

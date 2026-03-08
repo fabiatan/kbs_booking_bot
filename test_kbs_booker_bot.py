@@ -11,10 +11,13 @@ from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta, timezone
 import argparse
 
+import requests as requests_lib
+
 from kbs_booker_bot import (
     get_booking_target,
     build_config,
     calculate_booking_price,
+    KBSBooker,
     TIME_SLOTS,
     DAY_NAMES,
     MYT,
@@ -260,6 +263,116 @@ class TestMYTTimezone(unittest.TestCase):
         utc_time = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
         myt_time = utc_time.astimezone(MYT)
         self.assertEqual(myt_time.hour, 8)
+
+
+class TestLoginRetry(unittest.TestCase):
+    """Tests for login() retry behavior on network errors."""
+
+    def _make_booker(self):
+        """Create a KBSBooker with dummy credentials."""
+        return KBSBooker("dummy_user", "dummy_pass", debug=False)
+
+    @patch.object(requests_lib.Session, 'post')
+    @patch.object(requests_lib.Session, 'get')
+    def test_login_succeeds_with_valid_response(self, mock_get, mock_post):
+        """Test that login succeeds when server responds normally."""
+        login_page_html = '<input name="key" value="abc123"><input name="value" value="def456">'
+        get_resp = MagicMock()
+        get_resp.status_code = 200
+        get_resp.text = login_page_html
+        mock_get.return_value = get_resp
+
+        post_resp = MagicMock()
+        post_resp.status_code = 200
+        post_resp.url = "https://stf.kbs.gov.my/home.php"
+        post_resp.text = "selamat datang"
+        mock_post.return_value = post_resp
+
+        booker = self._make_booker()
+        result = booker.login()
+        self.assertTrue(result)
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch.object(requests_lib.Session, 'get')
+    def test_login_raises_on_timeout(self, mock_get):
+        """Test that login raises ReadTimeout when server is unreachable."""
+        mock_get.side_effect = requests_lib.exceptions.ReadTimeout("read timed out")
+
+        booker = self._make_booker()
+        with self.assertRaises(requests_lib.exceptions.ReadTimeout):
+            booker.login()
+        self.assertEqual(mock_get.call_count, 1)
+
+
+class TestGetCalendarPage(unittest.TestCase):
+    """Tests for get_calendar_page() optimizations."""
+
+    def _make_booker(self):
+        """Create a KBSBooker with dummy credentials."""
+        booker = KBSBooker("dummy_user", "dummy_pass", debug=False)
+        booker.logged_in = True  # Skip login
+        return booker
+
+    @patch.object(requests_lib.Session, 'get')
+    def test_skips_nav_on_retry(self, mock_get):
+        """Nav pages (tempahan_home, listfasiliti) should only be fetched on attempt 0."""
+        # All requests return empty page (no ks_token) to force retries
+        empty_resp = MagicMock()
+        empty_resp.status_code = 200
+        empty_resp.text = "<html>no token here</html>"
+        mock_get.return_value = empty_resp
+
+        booker = self._make_booker()
+        booker.get_calendar_page("vid", "fid", max_retries=3, retry_delay=0)
+
+        # Collect all URLs that were fetched
+        urls = [call.args[0] if call.args else call.kwargs.get('url', '') for call in mock_get.call_args_list]
+
+        # tempahan_home and listfasiliti should appear exactly once (attempt 0)
+        home_calls = [u for u in urls if 'tempahan_home' in u]
+        list_calls = [u for u in urls if 'tempahan_listfasiliti' in u]
+        cal_calls = [u for u in urls if 'tempahan_addcal' in u]
+
+        self.assertEqual(len(home_calls), 1, "tempahan_home should be called only once")
+        self.assertEqual(len(list_calls), 1, "tempahan_listfasiliti should be called only once")
+        self.assertEqual(len(cal_calls), 3, "tempahan_addcal should be called on every attempt")
+
+    @patch.object(requests_lib.Session, 'get')
+    def test_uses_calendar_timeout(self, mock_get):
+        """Calendar page request should use CALENDAR_TIMEOUT, not DEFAULT_TIMEOUT."""
+        token_html = '<input name="ks_token" value="abcdef1234567890abcdef1234567890">'
+        # First two calls (nav pages) + third call (calendar page with token)
+        nav_resp = MagicMock()
+        nav_resp.status_code = 200
+        nav_resp.text = "<html></html>"
+        cal_resp = MagicMock()
+        cal_resp.status_code = 200
+        cal_resp.text = token_html
+        mock_get.side_effect = [nav_resp, nav_resp, cal_resp]
+
+        booker = self._make_booker()
+        booker.get_calendar_page("vid", "fid", max_retries=1, retry_delay=0)
+
+        # Check the timeout used for the calendar page (3rd call)
+        cal_call = mock_get.call_args_list[2]
+        self.assertEqual(cal_call.kwargs.get('timeout'), KBSBooker.CALENDAR_TIMEOUT)
+
+    @patch.object(requests_lib.Session, 'get')
+    def test_caches_last_ks_token(self, mock_get):
+        """Successful token extraction should cache to _last_ks_token."""
+        token_html = '<input name="ks_token" value="abcdef1234567890abcdef1234567890">'
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.text = token_html
+        mock_get.return_value = resp
+
+        booker = self._make_booker()
+        self.assertIsNone(booker._last_ks_token)
+
+        booker.get_calendar_page("vid", "fid", max_retries=1, retry_delay=0)
+
+        self.assertEqual(booker._last_ks_token, "abcdef1234567890abcdef1234567890")
+        self.assertEqual(booker.ks_token, booker._last_ks_token)
 
 
 if __name__ == "__main__":
