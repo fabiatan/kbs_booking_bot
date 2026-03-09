@@ -42,7 +42,7 @@ jobs:
       - run: pip install requests
       
       - name: Stagger job start to prevent cart accumulation
-        run: sleep $((${{ matrix.day_offset }} * 10))
+        run: sleep $((${{ matrix.day_offset }} * 60))
       
       - name: Run booking bot (Day ${{ matrix.day_offset }})
         # Skip matrix jobs when specific date is provided (only run day_offset=0)
