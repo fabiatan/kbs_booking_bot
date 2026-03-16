@@ -140,7 +140,7 @@ def calculate_booking_price(time_start: str, time_end: str) -> tuple:
 class KBSBooker:
     BASE_URL = "https://stf.kbs.gov.my"
     DEFAULT_TIMEOUT = 20  # seconds - server responds in 2-5s normally; 60s was too generous
-    CALENDAR_TIMEOUT = 8  # shorter timeout for calendar page; fail fast and retry more often
+    CALENDAR_TIMEOUT = 15  # increased timeout for calendar page (under load); fail fast and retry more often
 
     # Telegram notification config (from environment variables)
     TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -307,7 +307,7 @@ class KBSBooker:
         
         return facilities
     
-    def get_calendar_page(self, venue_id: str, facility_id: str, neg: str = "07", max_retries: int = 8, retry_delay: float = 3.0) -> str:
+    def get_calendar_page(self, venue_id: str, facility_id: str, neg: str = "07", max_retries: int = 8, retry_delay: float = 3.0, backoff_factor: float = 1.5) -> str:
         """
         Navigate to calendar page to extract ks_token
         
@@ -330,7 +330,9 @@ class KBSBooker:
         for attempt in range(max_retries):
             if attempt > 0:
                 self.log(f"Retry attempt {attempt + 1}/{max_retries} for calendar page...")
-                time.sleep(retry_delay)
+                current_delay = retry_delay * (backoff_factor ** (attempt - 1))
+                self.log(f"Waiting {current_delay:.1f}s before retry...")
+                time.sleep(current_delay)
             
             try:
                 # Steps 1-2 only on first attempt (sets session cookies and referrer)
