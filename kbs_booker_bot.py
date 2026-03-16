@@ -826,25 +826,14 @@ class KBSBooker:
                                 return {"success": True, "court_name": retry_name}  # EXIT after successful backup booking
                             else:
                                 self.log(f"Secondary booking with facility index {retry_index} also failed.")
-                                # self.send_telegram(f"❌ Booking failed - primary and retry facilities failed.")
-                                # Don't exit here, maybe primary becomes available? Or just fail?
-                                # If fast book, we might loop. If standard, we loop.
-                                
-                                # Revert ID to primary for next loop iteration check
-                                config["facility_id_encoded"] = facilities[config.get("facility_index", 0)]['facility_id_encoded']
-                                config["facility_id"] = original_num
-                                config["tjk_id"] = original_tjk
-                                
-                                # Do NOT return False here. We want to continue polling if retry failed.
-                                # Just log and loop around.
-                                self.log("Continuing to poll...")
-                                pass 
+                                self.log("Both primary and secondary bookings failed. Concluding as failed.")
+                                return {"success": False, "court_name": None}
                         else:
                             self.log(f"Invalid retry facility index: {retry_index}. Cannot retry.")
-                            pass
+                            return {"success": False, "court_name": None}
                     else:
-                        # No retry facility configured, so just log and continue polling
-                        pass
+                        self.log("Primary booking failed and no retry facility configured. Concluding as failed.")
+                        return {"success": False, "court_name": None}
 
             # Progress update every 60 checks
             if check_count % 60 == 0:
