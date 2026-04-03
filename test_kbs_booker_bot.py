@@ -14,7 +14,7 @@ import argparse
 import requests as requests_lib
 
 from kbs_booker_bot import (
-    get_booking_target,
+    get_target_date,
     build_config,
     calculate_booking_price,
     KBSBooker,
@@ -24,86 +24,99 @@ from kbs_booker_bot import (
 )
 
 
-class TestGetBookingTarget(unittest.TestCase):
-    """Tests for get_booking_target() function."""
-    
-    def test_single_day_monday(self):
-        """Test getting Monday booking target."""
-        result = get_booking_target(0)
-        self.assertIsNotNone(result)
-        self.assertEqual(len(result), 4)  # (date, start, end, day_name)
-        self.assertEqual(result[3], "Monday")
-        self.assertEqual(result[1], TIME_SLOTS[0][0])  # time_start
-        self.assertEqual(result[2], TIME_SLOTS[0][1])  # time_end
-    
-    def test_single_day_friday(self):
-        """Test getting Friday booking target."""
-        result = get_booking_target(4)
-        self.assertIsNotNone(result)
-        self.assertEqual(result[3], "Friday")
-        self.assertEqual(result[1], "20:00:00")  # Friday special time
-        self.assertEqual(result[2], "22:00:00")
-    
-    def test_all_weekdays(self):
-        """Test getting all 5 weekday targets."""
-        result = get_booking_target(-1)
-        self.assertIsInstance(result, list)
-        self.assertEqual(len(result), 5)
-        
-        # Verify all days are present
-        day_names = [r[3] for r in result]
-        self.assertEqual(day_names, DAY_NAMES)
-    
-    def test_invalid_day_offset_too_high(self):
-        """Test that invalid day_offset raises ValueError."""
-        with self.assertRaises(ValueError):
-            get_booking_target(5)
-    
-    def test_invalid_day_offset_too_low(self):
-        """Test that invalid negative day_offset raises ValueError."""
-        with self.assertRaises(ValueError):
-            get_booking_target(-2)
-    
-    def test_date_format(self):
-        """Test that date is in DD/MM/YYYY format."""
-        result = get_booking_target(0)
-        date_str = result[0]
-        # Should match DD/MM/YYYY pattern
-        parts = date_str.split("/")
-        self.assertEqual(len(parts), 3)
-        self.assertEqual(len(parts[0]), 2)  # DD
-        self.assertEqual(len(parts[1]), 2)  # MM
-        self.assertEqual(len(parts[2]), 4)  # YYYY
-    
-    def test_time_format(self):
-        """Test that times are in HH:MM:SS format."""
-        result = get_booking_target(0)
-        time_start = result[1]
-        time_end = result[2]
-        
-        # Should match HH:MM:SS pattern
-        for time_str in [time_start, time_end]:
-            parts = time_str.split(":")
-            self.assertEqual(len(parts), 3)
-            self.assertEqual(len(parts[0]), 2)  # HH
-            self.assertEqual(len(parts[1]), 2)  # MM
-            self.assertEqual(len(parts[2]), 2)  # SS
+class TestGetTargetDate(unittest.TestCase):
+    """Tests for get_target_date() function."""
     
     @patch('kbs_booker_bot.datetime')
-    def test_auto_detect_weekday(self, mock_datetime):
-        """Test auto-detect returns correct day based on current date."""
-        # Mock a Wednesday (8 weeks from now would still be a weekday)
-        mock_now = MagicMock()
+    def test_weekday_target(self, mock_datetime):
+        """Test that a weekday target returns correct tuple."""
+        # Mock today = Monday April 6, 2026 → +60 = Friday June 5, 2026
+        mock_now = datetime(2026, 4, 6, 10, 0, 0, tzinfo=MYT)
         mock_datetime.now.return_value = mock_now
-        mock_now.__add__ = lambda self, x: datetime(2026, 2, 25, tzinfo=MYT)  # Wednesday
         mock_datetime.strptime = datetime.strptime
         
-        # Note: This test is tricky due to datetime mocking
-        # The real function uses datetime.now(MYT), so we skip deep mocking
-        result = get_booking_target()
-        # Should return a tuple (not None) for weekdays
+        result = get_target_date(days_ahead=60)
+        self.assertIsNotNone(result)
+        date_str, time_start, time_end, day_name = result
+        self.assertEqual(day_name, "Friday")
+        self.assertEqual(date_str, "05/06/2026")
+        self.assertEqual(time_start, TIME_SLOTS[4][0])  # Friday slot
+    
+    @patch('kbs_booker_bot.datetime')
+    def test_weekend_target_returns_none_saturday(self, mock_datetime):
+        """Test that Saturday target returns None."""
+        # Mock today = Thursday April 9, 2026 → +60 = Sunday June 8, 2026 (weekend)
+        # Actually let's find a date where +60 = Saturday
+        # April 4 (Sat) + 60 = June 3 (Wed) — not a weekend
+        # Need to find: target.weekday() == 5 (Saturday)
+        # June 6, 2026 is Saturday. 60 days before = April 7, 2026 (Tuesday)
+        mock_now = datetime(2026, 4, 7, 10, 0, 0, tzinfo=MYT)
+        mock_datetime.now.return_value = mock_now
+        
+        result = get_target_date(days_ahead=60)
+        # June 6, 2026 is a Saturday → should return None
+        self.assertIsNone(result)
+    
+    @patch('kbs_booker_bot.datetime')
+    def test_weekend_target_returns_none_sunday(self, mock_datetime):
+        """Test that Sunday target returns None."""
+        # June 7, 2026 is Sunday. 60 days before = April 8, 2026 (Wednesday)
+        mock_now = datetime(2026, 4, 8, 10, 0, 0, tzinfo=MYT)
+        mock_datetime.now.return_value = mock_now
+        
+        result = get_target_date(days_ahead=60)
+        # June 7, 2026 is a Sunday → should return None
+        self.assertIsNone(result)
+    
+    @patch('kbs_booker_bot.datetime')
+    def test_date_format(self, mock_datetime):
+        """Test that date is in DD/MM/YYYY format."""
+        mock_now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=MYT)
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.strptime = datetime.strptime
+        
+        result = get_target_date(days_ahead=60)
+        if result is not None:
+            date_str = result[0]
+            parts = date_str.split("/")
+            self.assertEqual(len(parts), 3)
+            self.assertEqual(len(parts[0]), 2)  # DD
+            self.assertEqual(len(parts[1]), 2)  # MM
+            self.assertEqual(len(parts[2]), 4)  # YYYY
+    
+    @patch('kbs_booker_bot.datetime')
+    def test_time_slots_applied(self, mock_datetime):
+        """Test that correct time slot is applied based on target weekday."""
+        # April 6 (Mon) + 60 = June 5 (Fri, weekday=4)
+        mock_now = datetime(2026, 4, 6, 10, 0, 0, tzinfo=MYT)
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.strptime = datetime.strptime
+        
+        result = get_target_date(days_ahead=60)
+        self.assertIsNotNone(result)
+        _, time_start, time_end, _ = result
+        expected_start, expected_end = TIME_SLOTS[4]  # Friday
+        self.assertEqual(time_start, expected_start)
+        self.assertEqual(time_end, expected_end)
+    
+    def test_default_days_ahead(self):
+        """Test that default days_ahead is 60 and produces a result (may be None on weekends)."""
+        result = get_target_date()
+        # Result is either a tuple or None — both are valid
         if result is not None:
             self.assertEqual(len(result), 4)
+    
+    @patch('kbs_booker_bot.datetime')
+    def test_custom_days_ahead(self, mock_datetime):
+        """Test with custom days_ahead value."""
+        mock_now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=MYT)
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.strptime = datetime.strptime
+        
+        result = get_target_date(days_ahead=30)
+        # April 4 + 30 = May 4, 2026 (Monday) → should return valid target
+        if result is not None:
+            self.assertEqual(result[3], "Monday")
 
 
 class TestBuildConfig(unittest.TestCase):
@@ -305,7 +318,7 @@ class TestLoginRetry(unittest.TestCase):
 
 
 class TestGetCalendarPage(unittest.TestCase):
-    """Tests for get_calendar_page() optimizations."""
+    """Tests for get_calendar_page() — goes directly to calendar page."""
 
     def _make_booker(self):
         """Create a KBSBooker with dummy credentials."""
@@ -314,9 +327,8 @@ class TestGetCalendarPage(unittest.TestCase):
         return booker
 
     @patch.object(requests_lib.Session, 'get')
-    def test_skips_nav_on_retry(self, mock_get):
-        """Nav pages (tempahan_home, listfasiliti) should only be fetched on attempt 0."""
-        # All requests return empty page (no ks_token) to force retries
+    def test_no_redundant_nav_pages(self, mock_get):
+        """Nav pages (tempahan_home, listfasiliti) should NOT be fetched at all."""
         empty_resp = MagicMock()
         empty_resp.status_code = 200
         empty_resp.text = "<html>no token here</html>"
@@ -328,33 +340,29 @@ class TestGetCalendarPage(unittest.TestCase):
         # Collect all URLs that were fetched
         urls = [call.args[0] if call.args else call.kwargs.get('url', '') for call in mock_get.call_args_list]
 
-        # tempahan_home and listfasiliti should appear exactly once (attempt 0)
+        # tempahan_home and listfasiliti should NOT appear at all
         home_calls = [u for u in urls if 'tempahan_home' in u]
         list_calls = [u for u in urls if 'tempahan_listfasiliti' in u]
         cal_calls = [u for u in urls if 'tempahan_addcal' in u]
 
-        self.assertEqual(len(home_calls), 1, "tempahan_home should be called only once")
-        self.assertEqual(len(list_calls), 1, "tempahan_listfasiliti should be called only once")
+        self.assertEqual(len(home_calls), 0, "tempahan_home should NOT be called")
+        self.assertEqual(len(list_calls), 0, "tempahan_listfasiliti should NOT be called")
         self.assertEqual(len(cal_calls), 3, "tempahan_addcal should be called on every attempt")
 
     @patch.object(requests_lib.Session, 'get')
     def test_uses_calendar_timeout(self, mock_get):
-        """Calendar page request should use CALENDAR_TIMEOUT, not DEFAULT_TIMEOUT."""
+        """Calendar page request should use CALENDAR_TIMEOUT."""
         token_html = '<input name="ks_token" value="abcdef1234567890abcdef1234567890">'
-        # First two calls (nav pages) + third call (calendar page with token)
-        nav_resp = MagicMock()
-        nav_resp.status_code = 200
-        nav_resp.text = "<html></html>"
         cal_resp = MagicMock()
         cal_resp.status_code = 200
         cal_resp.text = token_html
-        mock_get.side_effect = [nav_resp, nav_resp, cal_resp]
+        mock_get.return_value = cal_resp
 
         booker = self._make_booker()
         booker.get_calendar_page("vid", "fid", max_retries=1, retry_delay=0)
 
-        # Check the timeout used for the calendar page (3rd call)
-        cal_call = mock_get.call_args_list[2]
+        # Check the timeout used for the calendar page (1st call, no nav pages)
+        cal_call = mock_get.call_args_list[0]
         self.assertEqual(cal_call.kwargs.get('timeout'), KBSBooker.CALENDAR_TIMEOUT)
 
     @patch.object(requests_lib.Session, 'get')
