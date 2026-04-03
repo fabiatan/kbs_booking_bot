@@ -19,12 +19,10 @@ import os
 import requests
 import re
 import time
-import json
-import glob
 from datetime import datetime, timedelta, timezone
 import argparse
 
-# Centralized time slot configuration (day_offset: (start, end))
+# Centralized time slot configuration (weekday: (start, end))
 # 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday
 TIME_SLOTS = {
     0: ("20:00:00", "22:00:00"),  # Monday: 8-10pm (2 hours)
@@ -38,46 +36,29 @@ DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 # Malaysia timezone (UTC+8) - ensures correct date calculation on GitHub Actions
 MYT = timezone(timedelta(hours=8))
 
-def get_booking_target(day_offset=None, weeks_ahead=8):
+def get_target_date(days_ahead=60):
     """
-    Calculate booking target(s) for N weeks from now.
+    Calculate booking target: today + days_ahead.
+    KBS opens bookings exactly 60 days in advance.
     
     Args:
-        day_offset: 
-            - None: Auto-detect based on today's weekday (returns None for weekend)
-            - 0-4: Specific day (0=Monday to 4=Friday)
-            - -1: Return all 5 weekdays as a list
-        weeks_ahead: Number of weeks to look ahead (default: 8)
+        days_ahead: Number of days to look ahead (default: 60)
     
     Returns:
-        - If day_offset is None or 0-4: tuple (date_str, time_start, time_end, day_name) or None for weekend
-        - If day_offset is -1: list of tuples [(date_str, time_start, time_end, day_name), ...]
+        tuple (date_str, time_start, time_end, day_name) or None if target is a weekend
     """
     today = datetime.now(MYT)
-    future_date = today + timedelta(weeks=weeks_ahead)
-    target_monday = future_date - timedelta(days=future_date.weekday())
+    target_date = today + timedelta(days=days_ahead)
+    weekday = target_date.weekday()
     
-    def _get_day_target(offset):
-        target_date = target_monday + timedelta(days=offset)
-        time_start, time_end = TIME_SLOTS[offset]
-        date_str = target_date.strftime("%d/%m/%Y")
-        return (date_str, time_start, time_end, DAY_NAMES[offset])
+    # Skip weekends (5=Saturday, 6=Sunday)
+    if weekday >= 5:
+        return None
     
-    # Return all weekdays
-    if day_offset == -1:
-        return [_get_day_target(i) for i in range(5)]
-    
-    # Auto-detect from today's weekday
-    if day_offset is None:
-        day_of_week = future_date.weekday()
-        if day_of_week not in TIME_SLOTS:
-            return None  # Weekend - no booking
-        return _get_day_target(day_of_week)
-    
-    # Specific day offset
-    if day_offset < 0 or day_offset > 4:
-        raise ValueError(f"day_offset must be -1, None, or 0-4, got {day_offset}")
-    return _get_day_target(day_offset)
+    time_start, time_end = TIME_SLOTS[weekday]
+    date_str = target_date.strftime("%d/%m/%Y")
+    day_name = DAY_NAMES[weekday]
+    return (date_str, time_start, time_end, day_name)
 
 
 def build_config(args, date: str, time_start: str, time_end: str) -> dict:
@@ -140,7 +121,7 @@ def calculate_booking_price(time_start: str, time_end: str) -> tuple:
 class KBSBooker:
     BASE_URL = "https://stf.kbs.gov.my"
     DEFAULT_TIMEOUT = 20  # seconds - server responds in 2-5s normally; 60s was too generous
-    CALENDAR_TIMEOUT = 15  # increased timeout for calendar page (under load); fail fast and retry more often
+    CALENDAR_TIMEOUT = 30  # generous timeout for calendar page (heaviest endpoint, government server under load)
 
     # Telegram notification config (from environment variables)
     TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -309,15 +290,10 @@ class KBSBooker:
     
     def get_calendar_page(self, venue_id: str, facility_id: str, neg: str = "07", max_retries: int = 8, retry_delay: float = 3.0, backoff_factor: float = 1.5) -> str:
         """
-        Navigate to calendar page to extract ks_token
+        Fetch calendar page to extract ks_token.
         
-        Must follow proper navigation path:
-        1. tempahan_home.php (first attempt only - sets session)
-        2. tempahan_listfasiliti.php (first attempt only - sets referrer)
-        3. tempahan_addcal.php (contains ks_token)
-        
-        On retries, skips steps 1-2 since session/referrer are already set.
-        Uses CALENDAR_TIMEOUT (shorter) for the calendar page to fail fast.
+        Session cookies and referrer context are already set by get_facility_list()
+        called earlier in run(). This method goes directly to tempahan_addcal.php.
         
         Args:
             venue_id: Encoded venue ID (e.g., 'GxqArR56DGE8ZKkBI2f9')
@@ -335,23 +311,6 @@ class KBSBooker:
                 time.sleep(current_delay)
             
             try:
-                # Steps 1-2 only on first attempt (sets session cookies and referrer)
-                if attempt == 0:
-                    # Step 1: Visit tempahan home
-                    self.log("Navigating to tempahan home...")
-                    resp = self.session.get(f"{self.BASE_URL}/t_tempahan/tempahan_home.php", timeout=self.DEFAULT_TIMEOUT)
-                    if self.debug:
-                        self.log(f"tempahan_home.php status: {resp.status_code}")
-                    
-                    # Step 2: Visit facility list page (sets referrer context)
-                    self.log("Navigating to facility list...")
-                    list_url = f"{self.BASE_URL}/t_tempahan/tempahan_listfasiliti.php"
-                    list_params = {"id": venue_id, "neg": neg}
-                    resp = self.session.get(list_url, params=list_params, timeout=self.DEFAULT_TIMEOUT)
-                    if self.debug:
-                        self.log(f"tempahan_listfasiliti.php status: {resp.status_code}")
-                
-                # Step 3: Get calendar page with proper referrer (shorter timeout)
                 self.log("Fetching calendar page...")
                 cal_url = f"{self.BASE_URL}/t_tempahan/tempahan_addcal.php"
                 cal_params = {
@@ -861,7 +820,7 @@ Example:
     )
     parser.add_argument("--username", "-u", required=True, help="IC number")
     parser.add_argument("--password", "-p", required=True, help="Password")
-    parser.add_argument("--date", "-d", default="", help="Booking date (DD/MM/YYYY). If not specified, auto-calculates 8 weeks from today")
+    parser.add_argument("--date", "-d", default="", help="Booking date (DD/MM/YYYY). If not specified, auto-calculates today + 60 days")
     parser.add_argument("--time-start", "-ts", default="", help="Start time (HH:MM:SS). If not specified, uses day-specific time slot")
     parser.add_argument("--time-end", "-te", default="", help="End time (HH:MM:SS). If not specified, uses day-specific time slot")
     parser.add_argument("--venue-id", default="GxqArR56DGE8ZakBI2f9", help="Encoded venue ID from URL")
@@ -881,11 +840,8 @@ Example:
     parser.add_argument("--poll-timeout", type=int, default=1800, help="Max seconds to poll (default: 1800 = 30 minutes)")
     parser.add_argument("--check-interval", type=float, default=1.0, help="Seconds between availability checks (default: 1)")
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
-    parser.add_argument("--book-week", action="store_true", help="Book all 5 weekday slots (Mon-Fri) for the week 8 weeks ahead. Used when running on Monday.")
-    parser.add_argument("--day-offset", type=int, default=None, help="Book specific day only (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri). For parallel booking.")
-    parser.add_argument("--weeks-ahead", type=int, default=9, help="Number of weeks ahead to book (default: 9)")
-    parser.add_argument("--summary-report", action="store_true", help="Generate summary report from JSON result files (parallel booking only)")
-    parser.add_argument("--max-run-attempts", type=int, default=3, help="Max outer retry attempts if run() fails (default: 3, with 120s cooldown between)")
+    parser.add_argument("--days-ahead", type=int, default=60, help="Number of days ahead to book (default: 60)")
+    parser.add_argument("--max-run-attempts", type=int, default=3, help="Max outer retry attempts if run() fails (default: 3, with cooldown between)")
     parser.add_argument("--skip-calendar", action="store_true", help="Skip calendar page fetch (use dummy ks_token). Try this when server is overloaded.")
     
     args = parser.parse_args()
@@ -904,277 +860,25 @@ Example:
             print(f"  [{i}] idf={f['facility_id_encoded']}")
         return 0
 
-    # SINGLE DAY MODE (for parallel booking): Book specific day only
-    if args.day_offset is not None:
-        date, time_start, time_end, day_name = get_booking_target(args.day_offset, weeks_ahead=args.weeks_ahead)
-        print("=" * 50)
-        print(f"SINGLE DAY MODE: Booking {day_name}")
-        print(f"Date: {date} | Time: {time_start}-{time_end}")
-        print("=" * 50)
-        
-        config = build_config(args, date, time_start, time_end)
-        
-        success = False
-        court_name = "Unknown"
-        for run_attempt in range(1, args.max_run_attempts + 1):
-            result = booker.run(config, poll_timeout=args.poll_timeout, check_interval=args.check_interval)
-            
-            if isinstance(result, dict):
-                success = result.get("success", False)
-                court_name = result.get("court_name", "Unknown")
-            else:
-                success = bool(result)
-                court_name = "Unknown"
-            
-            if success:
-                break
-            
-            if run_attempt < args.max_run_attempts:
-                cooldown = 30 * (2 ** (run_attempt - 1))  # 30s, 60s, 120s...
-                print(f"Attempt {run_attempt}/{args.max_run_attempts} failed. Cooling down {cooldown}s before retry...")
-                time.sleep(cooldown)
-                booker.reset_session()
-        
-        if success:
-            print(f"✅ {day_name} booked successfully! (Court: {court_name})")
-        else:
-            print(f"❌ {day_name} booking failed after {args.max_run_attempts} attempts.")
-        
-        # Save result to JSON for aggregation
-        result_data = {
-            "day_name": day_name,
-            "date": date,
-            "time_start": time_start,
-            "time_end": time_end,
-            "success": success,
-            "court_name": court_name,
-            "day_offset": args.day_offset
-        }
-        filename = f"booking_result_{args.day_offset}.json"
-        with open(filename, "w") as f:
-            json.dump(result_data, f)
-        print(f"Result saved to {filename}")
-        
-        return 0 if success else 1
-
-    # SUMMARY REPORT MODE: Aggregate results and send Telegram summary
-    if args.summary_report:
-        print("=" * 50)
-        print("GENERATING WEEKLY SUMMARY REPORT")
-        print("=" * 50)
-        
-        # Find all result files
-        files = glob.glob("booking_result_*.json")
-        results = []
-        for f in files:
-            try:
-                with open(f, "r") as fp:
-                    results.append(json.load(fp))
-            except Exception as e:
-                print(f"Error reading {f}: {e}")
-        
-        # Sort by day offset (0=Mon to 4=Fri)
-        results.sort(key=lambda x: x.get("day_offset", 0))
-        
-        success_count = sum(1 for r in results if r["success"])
-        total_count = 5  # We expect 5 days
-        
-        summary_lines = [
-            f"📅 <b>WEEKLY BOOKING SUMMARY</b>",
-            f"Location: Kompleks Sukan KBS",
-            f"Total: {success_count}/{total_count} booked",
-            ""
-        ]
-        
-        # Ensure we have entries for all days (even if missing files)
-        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-        
-        # Initialize map with placeholders
-        final_results = {}
-        for i in range(5):
-            # Calculate date for this offset (approximate if not in results)
-            # This is tricky without reference, but we usually have results.
-            # If result missing, we mark as Failed/Unknown
-            final_results[i] = {
-                "day_name": day_names[i],
-                "date": "???", 
-                "time_start": "??:??:??", 
-                "time_end": "??:??:??", 
-                "success": False, 
-                "court_name": None,
-                "missing": True
-            }
-        
-        # Fill in actual results
-        for r in results:
-            offset = r.get("day_offset")
-            if offset is not None:
-                final_results[offset] = r
-                final_results[offset]["missing"] = False
-        
-        # Build the message and calculate total price
-        total_price = 0
-        for i in range(5):
-            r = final_results[i]
-            
-            # Calculate hours if times available
-            time_str = ""
-            hours = 0
-            if r["time_start"] != "??:??:??":
-                try:
-                    hours, price_calc, _ = calculate_booking_price(r["time_start"], r["time_end"])
-                    time_str = f"    Time: {r['time_start']}-{r['time_end']} ({hours}h)"
-                    
-                    # Calculate price for successful bookings
-                    if r["success"]:
-                        total_price += price_calc
-                except:
-                    time_str = f"    Time: {r['time_start']}-{r['time_end']}"
-            
-            status = "✅" if r["success"] else "❌"
-            date_info = f"({r['date']})" if r['date'] != "???" else ""
-            
-            # Format:
-            # ✅ Monday (23/02/2026) 
-            #     Venue: Gelanggang Tenis 1
-            #     Time: 21:00:00-22:00:00 (1h)
-            
-            summary_lines.append(f"{status} {r['day_name']} {date_info}")
-            
-            if r["success"] and r["court_name"]:
-                summary_lines.append(f"    Venue: {r['court_name']}")
-            
-            if time_str:
-                summary_lines.append(time_str)
-            elif r.get("missing"):
-                summary_lines.append("    (Job failed or result missing)")
-        
-        # Add total price to summary
-        if total_price > 0:
-            summary_lines.append("")
-            summary_lines.append(f"💰 Total: RM {total_price}")
-        
-        full_message = "\n".join(summary_lines)
-        print(full_message)
-        booker.send_telegram(full_message)
-        
-        return 0
-
-    # BOOK WEEK MODE: Book all 5 weekday slots (Mon-Fri)
-    if args.book_week:
-        print("=" * 50)
-        print("BOOK WEEK MODE: Booking Mon-Fri slots")
-        print("=" * 50)
-        
-        weekly_targets = get_booking_target(-1, weeks_ahead=args.weeks_ahead)  # Get all 5 days
-        print(f"Targets: {len(weekly_targets)} days")
-        for i, (date, ts, te, day_name) in enumerate(weekly_targets):
-            print(f"  [{i}] {day_name}: {date} {ts}-{te}")
-        
-        results = []
-        for i, (date, time_start, time_end, day_name) in enumerate(weekly_targets):
-            print(f"\n{'='*50}")
-            print(f"[{i+1}/5] Booking {day_name} ({date})")
-            print(f"{'='*50}")
-            
-            config = build_config(args, date, time_start, time_end)
-            
-            # For weekly booking, use shorter timeout per slot
-            slot_timeout = min(args.poll_timeout // 5, 600)  # Max 10 min per slot
-            
-            result = {"success": False, "court_name": None}
-            for run_attempt in range(1, args.max_run_attempts + 1):
-                result = booker.run(config, poll_timeout=slot_timeout, check_interval=args.check_interval)
-                if isinstance(result, dict) and result.get("success"):
-                    break
-                if run_attempt < args.max_run_attempts:
-                    cooldown = 120
-                    print(f"Attempt {run_attempt}/{args.max_run_attempts} for {day_name} failed. Cooling down {cooldown}s...")
-                    time.sleep(cooldown)
-                    booker.reset_session()
-            
-            # Handle dict return format
-            if isinstance(result, dict):
-                success = result.get("success", False)
-                court_name = result.get("court_name", "Unknown")
-            else:
-                # Fallback for bool return (shouldn't happen but just in case)
-                success = bool(result)
-                court_name = "Unknown"
-            
-            results.append((day_name, date, time_start, time_end, success, court_name))
-            
-            # Explicit continuation message regardless of success/failure
-            if success:
-                print(f"✅ {day_name} booked successfully! (Court: {court_name})")
-                # Note: Individual success messages are already sent by booker.run()
-            else:
-                print(f"❌ {day_name} booking failed (both courts unavailable or timeout).")
-            
-            remaining = 5 - (i + 1)
-            if remaining > 0:
-                print(f"➡️  Continuing to next day... ({remaining} remaining)")
-        
-        print("\n" + "=" * 50)
-        print("WEEKLY BOOKING SUMMARY")
-        print("=" * 50)
-        success_count = sum(1 for r in results if r[4])
-        fail_count = len(results) - success_count
-        print(f"Total: {success_count} SUCCESS, {fail_count} FAILED")
-        for day, date, ts, te, success, court in results:
-            status = "✅ SUCCESS" if success else "❌ FAILED"
-            court_info = f" ({court})" if success and court else ""
-            print(f"  {day} ({date}): {status}{court_info}")
-        
-        # Send Telegram summary in detailed format
-        summary_lines = [
-            f"📅 <b>WEEKLY BOOKING SUMMARY</b>",
-            f"Location: Kompleks Sukan KBS",
-            f"Total: {success_count}/5 booked",
-            ""
-        ]
-        total_price = 0
-        for day, date, ts, te, success, court in results:
-            hours, price_calc, _ = calculate_booking_price(ts, te)
-            
-            # Calculate price for successful bookings
-            if success:
-                total_price += price_calc
-            
-            status = "✅" if success else "❌"
-            court_info = f" - {court}" if success and court else ""
-            summary_lines.append(f"{status} {day} ({date}){court_info}")
-            summary_lines.append(f"    Time: {ts}-{te} ({hours}h)")
-        
-        # Add total price to summary
-        if total_price > 0:
-            summary_lines.append("")
-            summary_lines.append(f"💰 Total: RM {total_price}")
-        
-        booker.send_telegram("\n".join(summary_lines))
-        
-        # Return success if at least one day was booked
-        any_success = any(r[4] for r in results)
-        return 0 if any_success else 1
-
-    # Use automatic date/time calculation if not provided
+    # Calculate target date (today + days_ahead, skip weekends)
     if not args.date or not args.time_start or not args.time_end:
-        target = get_booking_target(weeks_ahead=args.weeks_ahead)  # Auto-detect from today's weekday
+        target = get_target_date(days_ahead=args.days_ahead)
         if target is None:
-            print("ERROR: Target date is a weekend. No booking scheduled.")
-            return 1
-        auto_date, auto_time_start, auto_time_end, _ = target  # Ignore day_name
+            print(f"Target date ({args.days_ahead} days ahead) falls on a weekend. Skipping.")
+            return 0  # Exit cleanly, not an error
+        auto_date, auto_time_start, auto_time_end, day_name = target
         if not args.date:
             args.date = auto_date
         if not args.time_start:
             args.time_start = auto_time_start
         if not args.time_end:
             args.time_end = auto_time_end
-        print(f"Auto-calculated booking: {args.date} {args.time_start}-{args.time_end}")
+        print(f"Target: {args.date} ({day_name}) {args.time_start}-{args.time_end}")
 
     config = build_config(args, args.date, args.time_start, args.time_end)
     
     success = False
+    court_name = "Unknown"
     for run_attempt in range(1, args.max_run_attempts + 1):
         result = booker.run(
             config,
@@ -1184,6 +888,7 @@ Example:
         
         if isinstance(result, dict):
             success = result.get("success", False)
+            court_name = result.get("court_name", "Unknown")
         else:
             success = bool(result)
         
@@ -1196,12 +901,15 @@ Example:
             time.sleep(cooldown)
             booker.reset_session()
     
-    if not success:
-        print(f"Booking failed after {args.max_run_attempts} attempts.")
+    if success:
+        print(f"✅ Booked successfully! (Court: {court_name})")
+    else:
+        print(f"❌ Booking failed after {args.max_run_attempts} attempts.")
     
     return 0 if success else 1
 
 
 if __name__ == "__main__":
     exit(main())
+
 
