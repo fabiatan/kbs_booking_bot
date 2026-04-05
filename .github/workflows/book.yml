@@ -20,6 +20,16 @@ on:
         required: false
         default: '60'
         type: string
+      time_start:
+        description: 'Start time (HH:MM:SS), leave empty for auto'
+        required: false
+        default: ''
+        type: string
+      time_end:
+        description: 'End time (HH:MM:SS), leave empty for auto'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   book:
@@ -45,4 +55,6 @@ jobs:
             -p "$PASSWORD" \
             ${{ inputs.days_ahead && format('--days-ahead {0}', inputs.days_ahead) || '' }} \
             ${{ inputs.date != '' && format('-d "{0}"', inputs.date) || '' }} \
-            ${{ inputs.poll_timeout && format('--poll-timeout {0}', inputs.poll_timeout) || '' }}
+            ${{ inputs.poll_timeout && format('--poll-timeout {0}', inputs.poll_timeout) || '' }} \
+            ${{ inputs.time_start != '' && format('-ts "{0}"', inputs.time_start) || '' }} \
+            ${{ inputs.time_end != '' && format('-te "{0}"', inputs.time_end) || '' }}
