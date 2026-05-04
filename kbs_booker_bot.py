@@ -25,11 +25,11 @@ import argparse
 # Centralized time slot configuration (weekday: (start, end))
 # 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday
 TIME_SLOTS = {
-    0: ("20:00:00", "22:00:00"),  # Monday: 8-10pm (2 hours)
-    1: ("20:00:00", "22:00:00"),  # Tuesday: 8-10pm (2 hours)
-    2: ("20:00:00", "22:00:00"),  # Wednesday: 8-10pm (2 hours)
-    3: ("20:00:00", "22:00:00"),  # Thursday: 8-10pm (2 hours)
-    4: ("20:00:00", "22:00:00"),  # Friday: 8-10pm (2 hours)
+    0: ("21:00:00", "22:00:00"),  # Monday: 9-10pm (2 hours)
+    1: ("21:00:00", "22:00:00"),  # Tuesday: 9-10pm (2 hours)
+    2: ("21:00:00", "22:00:00"),  # Wednesday: 9-10pm (2 hours)
+    3: ("21:00:00", "22:00:00"),  # Thursday: 9-10pm (2 hours)
+    4: ("21:00:00", "22:00:00"),  # Friday: 9-10pm (2 hours)
 }
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
