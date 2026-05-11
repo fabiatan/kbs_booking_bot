@@ -170,20 +170,42 @@ class KBSBooker:
         except Exception as e:
             self.log(f"Telegram notification failed: {e}")
     
-    def login(self) -> bool:
+    def login(self, max_retries: int = 5, retry_delay: float = 5.0, backoff_factor: float = 2.0) -> bool:
         """
-        Login to KBS system
+        Login to KBS system with retry logic for transient network errors.
         
         Flow:
         1. GET login page to extract hidden 'key' and 'value' fields
         2. POST credentials with tokens to login_handler.php
+        
+        Args:
+            max_retries: Maximum retry attempts for network errors
+            retry_delay: Initial delay between retries (seconds)
+            backoff_factor: Multiplier for delay after each retry
         """
         login_page_url = f"{self.BASE_URL}/ks_user/login.php"
         login_handler_url = f"{self.BASE_URL}/ks_user/login_handler.php"
         
-        # Step 1: Get login page to extract tokens
-        self.log("Fetching login page...")
-        resp = self.session.get(login_page_url, timeout=self.DEFAULT_TIMEOUT)
+        # Step 1: Get login page to extract tokens (with retry)
+        resp = None
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    current_delay = retry_delay * (backoff_factor ** (attempt - 1))
+                    self.log(f"Retry {attempt + 1}/{max_retries} - waiting {current_delay:.0f}s before reconnecting...")
+                    time.sleep(current_delay)
+                
+                self.log("Fetching login page...")
+                resp = self.session.get(login_page_url, timeout=self.DEFAULT_TIMEOUT)
+                break  # Success - exit retry loop
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                self.log(f"Connection error on attempt {attempt + 1}/{max_retries}: {e}")
+                if attempt == max_retries - 1:
+                    self.log("ERROR: Could not reach KBS server after all retries. Server may be down.")
+                    return False
+        
+        if resp is None:
+            return False
         
         if self.debug:
             self.log(f"Login page status: {resp.status_code}")
@@ -212,7 +234,7 @@ class KBSBooker:
             self.log(f"Extracted key: {key_token}")
             self.log(f"Extracted value: {value_token}")
         
-        # Step 2: POST login credentials
+        # Step 2: POST login credentials (with retry)
         login_data = {
             "usrid": self.username,
             "password": self.password,
@@ -221,8 +243,25 @@ class KBSBooker:
             "red": ""
         }
         
-        self.log("Submitting login...")
-        resp = self.session.post(login_handler_url, data=login_data, allow_redirects=True, timeout=self.DEFAULT_TIMEOUT)
+        resp = None
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    current_delay = retry_delay * (backoff_factor ** (attempt - 1))
+                    self.log(f"Retry {attempt + 1}/{max_retries} - waiting {current_delay:.0f}s before resubmitting...")
+                    time.sleep(current_delay)
+                
+                self.log("Submitting login...")
+                resp = self.session.post(login_handler_url, data=login_data, allow_redirects=True, timeout=self.DEFAULT_TIMEOUT)
+                break  # Success - exit retry loop
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                self.log(f"Connection error on login POST attempt {attempt + 1}/{max_retries}: {e}")
+                if attempt == max_retries - 1:
+                    self.log("ERROR: Could not submit login after all retries. Server may be down.")
+                    return False
+        
+        if resp is None:
+            return False
         
         # Check if logged in - successful login redirects to home.php
         logged_in = (
