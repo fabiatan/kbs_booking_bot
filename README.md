@@ -54,4 +54,4 @@ Bot sends Telegram notifications for:
 
 ## Schedule
 
-The workflow runs daily at **8:25 AM MYT** (configured in `.github/workflows/book.yml`).
+The workflow runs at **00:00 (12am) MYT** on days where `today + 60` lands on a weekday — i.e. MYT Mon, Thu, Fri, Sat, Sun. Tue/Wed runs are skipped because their 60-day target falls on a weekend (KBS only opens weekday slots). Configured in `.github/workflows/book.yml`.
