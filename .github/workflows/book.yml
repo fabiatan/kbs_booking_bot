@@ -3,7 +3,6 @@ name: KBS Booking Bot
 on:
   schedule:
     - cron: '50 15 * * 0,3-6'  # 11:50 PM MYT (UTC+8) Wed-Sun — Mon/Tue skipped (target=weekend)
-    - cron: '0 17 * * 2-6'      # 1:00 AM MYT (UTC+8) Wed-Sun
   workflow_dispatch:
     inputs:
       poll_timeout:
