@@ -175,43 +175,43 @@ class TestCalculateBookingPrice(unittest.TestCase):
     """Tests for calculate_booking_price() function."""
     
     def test_daytime_rate(self):
-        """Test daytime rate (before 7pm) is RM 10/hour."""
+        """Test daytime rate (before 7pm) is RM 25/hour."""
         hours, total, rate = calculate_booking_price("10:00:00", "12:00:00")
         self.assertEqual(hours, 2)
-        self.assertEqual(rate, 10)
-        self.assertEqual(total, 20)
+        self.assertEqual(rate, 25)
+        self.assertEqual(total, 50)
     
     def test_nighttime_rate_at_7pm(self):
-        """Test nighttime rate (7pm onwards) is RM 15/hour."""
+        """Test nighttime rate (7pm onwards) is RM 40/hour."""
         hours, total, rate = calculate_booking_price("19:00:00", "21:00:00")
         self.assertEqual(hours, 2)
-        self.assertEqual(rate, 15)
-        self.assertEqual(total, 30)
+        self.assertEqual(rate, 40)
+        self.assertEqual(total, 80)
     
     def test_nighttime_rate_after_7pm(self):
         """Test nighttime rate for slots starting after 7pm."""
         hours, total, rate = calculate_booking_price("21:00:00", "22:00:00")
         self.assertEqual(hours, 1)
-        self.assertEqual(rate, 15)
-        self.assertEqual(total, 15)
+        self.assertEqual(rate, 40)
+        self.assertEqual(total, 40)
     
     def test_boundary_before_7pm(self):
         """Test rate at 6:59pm is still daytime rate."""
         hours, total, rate = calculate_booking_price("18:00:00", "19:00:00")
-        self.assertEqual(rate, 10)
-        self.assertEqual(total, 10)
+        self.assertEqual(rate, 25)
+        self.assertEqual(total, 25)
     
     def test_four_hour_booking(self):
         """Test 4-hour booking calculation."""
         hours, total, rate = calculate_booking_price("08:00:00", "12:00:00")
         self.assertEqual(hours, 4)
-        self.assertEqual(total, 40)  # 4 * 10
+        self.assertEqual(total, 100)  # 4 * 25
     
     def test_one_hour_night(self):
         """Test 1-hour nighttime booking."""
         hours, total, rate = calculate_booking_price("20:00:00", "21:00:00")
         self.assertEqual(hours, 1)
-        self.assertEqual(total, 15)
+        self.assertEqual(total, 40)
     
     def test_returns_tuple(self):
         """Test that function returns a 3-tuple."""
@@ -247,7 +247,7 @@ class TestTimeSlots(unittest.TestCase):
         for day, (start, end) in TIME_SLOTS.items():
             hours, total, rate = calculate_booking_price(start, end)
             start_hour = int(start.split(":")[0])
-            expected_rate = 10 if start_hour < 19 else 15
+            expected_rate = 25 if start_hour < 19 else 40
             self.assertEqual(
                 rate, expected_rate,
                 f"{DAY_NAMES[day]} ({start}-{end}) should have rate RM{expected_rate}, got RM{rate}"
