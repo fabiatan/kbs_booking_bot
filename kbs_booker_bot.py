@@ -100,8 +100,8 @@ def calculate_booking_price(time_start: str, time_end: str) -> tuple:
     Calculate booking price based on time of day.
     
     Rates:
-        - Daytime (before 7pm/19:00): RM 10/hour
-        - Nighttime (7pm onwards): RM 15/hour
+        - Daytime (before 7pm/19:00): RM 25/hour
+        - Nighttime (7pm onwards): RM 40/hour
     
     Args:
         time_start: Start time in HH:MM:SS format
@@ -113,7 +113,7 @@ def calculate_booking_price(time_start: str, time_end: str) -> tuple:
     t_start = datetime.strptime(time_start, "%H:%M:%S")
     t_end = datetime.strptime(time_end, "%H:%M:%S")
     hours = int((t_end - t_start).seconds / 3600)
-    hourly_rate = 10 if t_start.hour < 19 else 15
+    hourly_rate = 25 if t_start.hour < 19 else 40
     total_price = hours * hourly_rate
     return (hours, total_price, hourly_rate)
 
@@ -477,8 +477,8 @@ class KBSBooker:
             "tt_jumlah_jam": str(hours),
             "tt_jumlah_hari": "",
             "tt_jumlah": total_price,
-            "jamsiang": config.get("rate_day", "10.00"),
-            "jammalam": config.get("rate_night", "15.00"),
+            "jamsiang": config.get("rate_day", "25.00"),
+            "jammalam": config.get("rate_night", "40.00"),
             "jamsiangbw": config.get("rate_day_bw", "15.00"),
             "jammalambw": config.get("rate_night_bw", "20.00"),
             "sehari": config.get("rate_daily", "200.00"),
